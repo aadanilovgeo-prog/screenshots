@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+scroll_capture_*.png
+frames/
