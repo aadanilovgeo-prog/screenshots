@@ -44,23 +44,30 @@ int sc_mkdir_p(const char *path) {
     return CreateDirectoryA(buf, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
+static void send_mouse_input(DWORD flags, DWORD data) {
+    INPUT input;
+    memset(&input, 0, sizeof(input));
+    input.type = INPUT_MOUSE;
+    input.mi.dwFlags = flags;
+    input.mi.mouseData = data;
+    SendInput(1, &input, sizeof(INPUT));
+}
+
 int sc_focus_region(const ScRegion *region) {
     int x = region->left + region->width / 2;
     int y = region->top + region->height / 2;
 
     SetCursorPos(x, y);
     sc_sleep_ms(50);
-    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+    send_mouse_input(MOUSEEVENTF_LEFTDOWN, 0);
+    send_mouse_input(MOUSEEVENTF_LEFTUP, 0);
     sc_sleep_ms(80);
     return 1;
 }
 
 static void wheel_at(int x, int y, int notches_down) {
-    DWORD delta;
     SetCursorPos(x, y);
-    delta = (DWORD)(-(int)(SC_WHEEL_DELTA * notches_down));
-    mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0);
+    send_mouse_input(MOUSEEVENTF_WHEEL, (DWORD)(-(int)(SC_WHEEL_DELTA * notches_down)));
 }
 
 void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll) {

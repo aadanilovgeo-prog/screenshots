@@ -22,17 +22,19 @@ jobs:
       - name: Bump version
         run: python c/scripts/bump_version.py
 
-      - name: Build exe
-        shell: bash
+      - name: Generate version resource
+        run: python c/scripts/generate_version_rc.py
+
+      - name: Build exe (MSVC + VERSIONINFO)
+        shell: cmd
         run: |
-          VER=$(tr -d '\r\n' < VERSION)
-          mkdir -p c/dist
-          rm -f c/dist/scroll_capture_v*.exe
+          for /f "usebackq delims=" %%v in ("VERSION") do set SC_VER=%%v
+          if not exist c\dist mkdir c\dist
+          del /q c\dist\scroll_capture_v*.exe 2>nul
           cd c
-          gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o "dist/scroll_capture_v${VER}.exe" \
-            src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c \
-            -lgdi32 -luser32
-          echo "Built dist/scroll_capture_v${VER}.exe"
+          rc /nologo /fo scroll_capture.res scroll_capture.rc
+          cl /nologo /O2 /W4 /Iinclude src\main.c src\config.c src\image.c src\stitch.c src\capture.c src\png_io.c src\platform_win32.c /Fe:dist\scroll_capture_v%SC_VER%.exe /link user32.lib gdi32.lib scroll_capture.res
+          echo Built dist\scroll_capture_v%SC_VER%.exe
 
       - name: Commit and push release
         shell: bash

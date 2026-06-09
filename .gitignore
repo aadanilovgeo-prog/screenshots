@@ -7,3 +7,6 @@ c/scroll_capture.exe
 c/dist/scroll_capture.exe
 !c/dist/scroll_capture_v*.exe
 *.o
+c/scroll_capture.rc
+c/scroll_capture.res
+c/*.obj
