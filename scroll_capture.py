@@ -315,7 +315,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--wheel-notches",
         dest="wheel_notches",
         type=int,
-        default=12,
+        default=20,
         help="Сколько «щелчков» колёсика за один шаг прокрутки",
     )
     parser.add_argument(
@@ -336,14 +336,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Не кликать в область статьи перед прокруткой (обычно клик нужен)",
     )
     parser.add_argument(
-        "--focus-each-step",
+        "--no-focus-each-step",
         action="store_true",
-        help="Кликать в область перед каждым шагом (для кастомных скроллеров)",
+        help="Не кликать в область перед каждым шагом (по умолчанию клик включён)",
     )
     parser.add_argument(
         "--scroll-delay",
         type=float,
-        default=0.45,
+        default=0.8,
         help="Пауза после прокрутки перед скриншотом, сек",
     )
     parser.add_argument(
@@ -396,7 +396,7 @@ def main() -> int:
         micro_steps=args.micro_steps,
         micro_delay=args.micro_delay,
         focus_click=not args.no_focus_click,
-        focus_before_each_step=args.focus_each_step,
+        focus_before_each_step=not args.no_focus_each_step,
     )
 
     print(

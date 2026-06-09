@@ -46,13 +46,13 @@ python scroll_capture.py
 | `--focus-each-step` | Кликать в область перед каждым шагом |
 | `--scroll-delay 0.45` | Пауза после прокрутки перед снимком |
 
-### Если страница не листается
+По умолчанию уже включены: `win32` на Windows, 20 щелчков колёсика, клик перед каждым шагом, пауза 0.8 сек. Достаточно:
 
 ```bash
-python scroll_capture.py --scroll-method win32 --wheel-notches 20 --focus-each-step --scroll-delay 0.8
+python scroll_capture.py
 ```
 
-Попробуйте также `--scroll-method pynput`, если `win32` не помогает.
+Если страница не листается, попробуйте `--scroll-method pynput` или увеличьте `--wheel-notches`.
 
 ## Другие параметры
 
