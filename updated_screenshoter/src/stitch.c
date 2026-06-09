@@ -100,7 +100,56 @@ static int match_buf_build(const UsImage *img, MatchBuf *b, int skip_top_rows) {
     return 1;
 }
 
-static double match_cost(const MatchBuf *above, const MatchBuf *below, int overlap, int skip_top) {
+static double seam_mean_diff(const UsImage *above, const UsImage *below, int overlap) {
+    int y, x, w = above->width;
+    int ha = above->height;
+    long long sum = 0;
+    int pixels = 0;
+    int check_rows = overlap < 40 ? overlap : 40;
+    int start = overlap - check_rows;
+    if (start < 0) {
+        start = 0;
+    }
+    for (y = start; y < overlap; y++) {
+        const unsigned char *ra = above->rgb + (size_t)(ha - overlap + y) * (size_t)w * 3u;
+        const unsigned char *rb = below->rgb + (size_t)y * (size_t)w * 3u;
+        for (x = 0; x < w; x += 3) {
+            sum += abs((int)ra[x * 3] - (int)rb[x * 3]);
+            sum += abs((int)ra[x * 3 + 1] - (int)rb[x * 3 + 1]);
+            sum += abs((int)ra[x * 3 + 2] - (int)rb[x * 3 + 2]);
+            pixels += 3;
+        }
+    }
+    if (pixels == 0) {
+        return 1.0;
+    }
+    return (sum / (double)pixels) / 255.0;
+}
+
+static int us_cap_overlap_anti_gap(int overlap, int expected, int height) {
+    int hard_cap = expected + (int)(height * 0.04);
+    if (hard_cap > height - 30) {
+        hard_cap = height - 30;
+    }
+    if (overlap > hard_cap) {
+        return hard_cap;
+    }
+    return overlap;
+}
+
+static int us_refine_overlap_downward(const UsImage *above, const UsImage *below, int overlap, int min_overlap) {
+    int o = overlap;
+    while (o > min_overlap) {
+        double seam = seam_mean_diff(above, below, o);
+        if (seam < 0.06) {
+            break;
+        }
+        o -= 2;
+    }
+    return o < min_overlap ? min_overlap : o;
+}
+
+static double match_cost(const MatchBuf *above, const MatchBuf *below, int overlap, int skip_top, int expected) {
     int y, x;
     double ssd = 0;
     int pixels = 0;
@@ -123,7 +172,15 @@ static double match_cost(const MatchBuf *above, const MatchBuf *below, int overl
 
     ni = ncc(above->profile + above->height - overlap, below->profile, overlap);
     ng = ncc(above->grad_profile + above->height - overlap, below->grad_profile, overlap);
-    return ssd / 255.0 - 0.55 * (double)ni - 0.35 * (double)ng;
+    {
+        double cost = ssd / 255.0 - 0.55 * (double)ni - 0.35 * (double)ng;
+        if (overlap > expected) {
+            cost += 0.8 * (double)(overlap - expected);
+        } else {
+            cost += 0.15 * (double)(expected - overlap);
+        }
+        return cost;
+    }
 }
 
 static double cost_to_confidence(double cost) {
@@ -161,8 +218,8 @@ UsOverlapResult us_find_overlap(const UsImage *previous, const UsImage *current,
         skip_top = 8;
     }
 
-    min_o = metrics->expected_overlap - (int)(h * 0.08);
-    max_o = metrics->expected_overlap + (int)(h * 0.08);
+    min_o = metrics->expected_overlap - (int)(h * 0.14);
+    max_o = metrics->expected_overlap + (int)(h * 0.04);
     if (min_o < search_px / 2) {
         min_o = search_px / 2;
     }
@@ -189,7 +246,7 @@ UsOverlapResult us_find_overlap(const UsImage *previous, const UsImage *current,
 
     best_o = min_o;
     for (o = min_o; o <= max_o; o++) {
-        double cost = match_cost(&ma, &mb, o, skip_top);
+        double cost = match_cost(&ma, &mb, o, skip_top, metrics->expected_overlap);
         if (cost < best_cost) {
             second_cost = best_cost;
             best_cost = cost;
@@ -204,7 +261,7 @@ UsOverlapResult us_find_overlap(const UsImage *previous, const UsImage *current,
         if (o < min_o || o > max_o) {
             continue;
         }
-        cost = match_cost(&ma, &mb, o, skip_top);
+        cost = match_cost(&ma, &mb, o, skip_top, metrics->expected_overlap);
         if (cost < best_cost) {
             second_cost = best_cost;
             best_cost = cost;
@@ -224,11 +281,15 @@ UsOverlapResult us_find_overlap(const UsImage *previous, const UsImage *current,
         result.overlap = best_o;
         result.used_fallback = 0;
     } else {
-        result.overlap = metrics->expected_overlap;
+        int safe = best_o < metrics->expected_overlap ? best_o : metrics->expected_overlap;
+        result.overlap = safe;
         result.used_fallback = 1;
-        printf("  [fallback] low overlap confidence %.2f, using expected overlap %d px\n",
-               result.confidence, result.overlap);
+        printf("  [fallback] low confidence %.2f, safe overlap %d px (best=%d expected=%d)\n",
+               result.confidence, result.overlap, best_o, metrics->expected_overlap);
     }
+
+    result.overlap = us_cap_overlap_anti_gap(result.overlap, metrics->expected_overlap, h);
+    result.overlap = us_refine_overlap_downward(previous, current, result.overlap, min_o);
 
     if (result.overlap > h - 5) {
         result.overlap = h - 5;
@@ -256,12 +317,21 @@ int us_stabilize_overlaps(int *overlaps, int *fallbacks, int count) {
     memcpy(copy, overlaps, (size_t)count * sizeof(int));
     qsort(copy, (size_t)count, sizeof(int), compare_int);
     median = copy[count / 2];
-
-    for (i = 0; i < count; i++) {
-        if (fallbacks && fallbacks[i]) {
-            overlaps[i] = median;
-        } else if (abs(overlaps[i] - median) > (int)(median * 0.15) + 30) {
-            overlaps[i] = median;
+    {
+        int p25 = copy[count / 4];
+        int safe_ref = p25 < median ? p25 : median - 5;
+        if (safe_ref < 30) {
+            safe_ref = median;
+        }
+        for (i = 0; i < count; i++) {
+            if (fallbacks && fallbacks[i]) {
+                overlaps[i] = safe_ref;
+            } else if (overlaps[i] > median + 25) {
+                overlaps[i] = median;
+            } else if (abs(overlaps[i] - median) > (int)(median * 0.12) + 20) {
+                overlaps[i] = overlaps[i] < median ? overlaps[i] : safe_ref;
+            }
+            if (overlaps[i] > median + 20) { overlaps[i] = median + 10; }
         }
     }
 

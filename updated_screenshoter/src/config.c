@@ -13,7 +13,7 @@ void us_config_print_help(const char *prog) {
         "  -o, --output FILE     Output PNG path\n"
         "  --countdown N         Seconds before start (default 5)\n"
         "  --max-frames N        Max frames (default 600)\n"
-        "  --scroll-fraction F   Scroll step as fraction of height (default 0.72)\n"
+        "  --scroll-fraction F   Scroll step as fraction of height (default 0.65)\n"
         "  --stable-wait MS      Delay after scroll stabilizes (default 300)\n"
         "  --capture-delay MS    Extra delay before capture (default 200)\n"
         "  --downloads           Save to Downloads folder\n"

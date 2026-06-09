@@ -17,10 +17,12 @@ int us_run_capture_session(
     UsImage *current = NULL;
     int index;
     int cumulative_scroll = 0;
+    int running_overlap;
 
     us_get_page_metrics(region, &metrics);
     metrics.scroll_step = us_scroll_step_for_height(region->height, cfg->scroll_fraction);
     metrics.expected_overlap = us_expected_overlap_for_height(region->height, cfg->scroll_fraction);
+    running_overlap = metrics.expected_overlap;
 
     printf("Page metrics: viewport %dx%d, scrollStep=%d, expectedOverlap=%d\n",
            metrics.viewport_width,
@@ -75,7 +77,11 @@ int us_run_capture_session(
             break;
         }
 
+        metrics.expected_overlap = running_overlap;
         ov = us_find_overlap(previous, current, &metrics);
+        if (ov.overlap > 0 && !ov.used_fallback) {
+            running_overlap = (running_overlap * 3 + ov.overlap) / 4;
+        }
         overlaps[*overlap_count] = ov.overlap;
         fallbacks[*overlap_count] = ov.used_fallback;
         (*overlap_count)++;

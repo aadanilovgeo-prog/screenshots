@@ -4,10 +4,10 @@
 #include <stddef.h>
 
 #define US_MAX_FRAMES 600
-#define US_SCROLL_FRACTION 0.72
+#define US_SCROLL_FRACTION 0.65
 #define US_HEADER_EXCLUDE_FRAC 0.12
-#define US_OVERLAP_SEARCH_FRAC 0.38
-#define US_MIN_CONFIDENCE 0.52
+#define US_OVERLAP_SEARCH_FRAC 0.42
+#define US_MIN_CONFIDENCE 0.45
 #define US_WHEEL_DELTA 120
 
 typedef struct {
