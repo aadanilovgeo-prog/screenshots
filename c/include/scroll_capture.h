@@ -5,7 +5,7 @@
 
 #define SC_WHEEL_DELTA 120
 #define SC_PX_PER_WHEEL_NOTCH 35
-#define SC_MAX_FRAMES 300
+#define SC_MAX_FRAMES 600
 
 typedef struct {
     int left;
