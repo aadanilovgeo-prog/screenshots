@@ -2,9 +2,9 @@
 #define SCROLL_CAPTURE_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 #define SC_WHEEL_DELTA 120
-#define SC_PX_PER_WHEEL_NOTCH 35
 #define SC_MAX_FRAMES 600
 
 typedef struct {
@@ -25,11 +25,6 @@ typedef struct {
     int count;
     int capacity;
 } ScFrameList;
-
-typedef struct {
-    int overlap;
-    double score;
-} ScOverlapMatch;
 
 typedef struct {
     int wheel_notches;
@@ -54,10 +49,37 @@ typedef struct {
     double settle_delay;
     int max_frames;
     double same_frame_threshold;
-    int expected_overlap;
+    int safe_stitch;
     char save_frames_dir[512];
     int has_save_frames;
 } ScConfig;
+
+typedef struct {
+    int detected_shift;
+    int detected_overlap;
+    int initial_crop;
+    double confidence;
+    double match_score;
+} ScShiftData;
+
+typedef struct {
+    int crop;
+    int initial_crop;
+    double confidence;
+    double content_loss_risk;
+    double duplicate_risk;
+    double table_seam_risk;
+    double image_seam_risk;
+    int weak_seam;
+    int safe_mode;
+} ScSafeCrop;
+
+typedef struct {
+    FILE *log_file;
+    char debug_dir[512];
+    int has_debug_dir;
+    int frame_index;
+} ScStitchLog;
 
 int sc_config_parse(ScConfig *cfg, int argc, char **argv);
 void sc_config_print_help(const char *prog);
@@ -65,33 +87,46 @@ void sc_config_print_help(const char *prog);
 ScImage *sc_image_create(int width, int height);
 void sc_image_free(ScImage *img);
 ScImage *sc_image_copy(const ScImage *src);
+ScImage *sc_image_append_crop(const ScImage *result, const ScImage *frame, int top_crop);
 double sc_image_diff_ratio(const ScImage *a, const ScImage *b);
 
 void sc_frame_list_init(ScFrameList *list);
 int sc_frame_list_push(ScFrameList *list, ScImage *img);
 void sc_frame_list_clear(ScFrameList *list);
 
-int sc_overlap_search_bounds(
-    int frame_height,
-    int wheel_notches,
-    int expected_overlap,
-    int preferred_overlap,
-    int has_preferred,
-    int *min_overlap,
-    int *max_overlap
-);
-
-ScOverlapMatch sc_find_vertical_overlap(
+int sc_detect_vertical_content_shift(
     const ScImage *above,
     const ScImage *below,
-    int min_overlap,
-    int max_overlap,
-    int preferred_overlap,
-    int has_preferred
+    ScShiftData *out
 );
 
-int sc_stabilize_overlaps(int *overlaps, int count);
-ScImage *sc_stitch_frames(const ScFrameList *frames, const int *overlaps, int overlap_count);
+ScSafeCrop sc_choose_safe_crop(
+    const ScImage *above,
+    const ScImage *below,
+    const ScShiftData *shift,
+    int safe_mode
+);
+
+double sc_evaluate_seam(const ScImage *above, const ScImage *below, int crop);
+
+ScImage *sc_append_frame_safely(const ScImage *result, const ScImage *frame, int safe_crop);
+ScImage *sc_stitch_frames_safe(const ScFrameList *frames, const int *crops, int crop_count);
+
+void sc_stitch_log_init(ScStitchLog *log, const char *debug_dir);
+void sc_stitch_log_close(ScStitchLog *log);
+void sc_stitch_log_frame(
+    ScStitchLog *log,
+    int frame_index,
+    const ScShiftData *shift,
+    const ScSafeCrop *crop,
+    int end_of_page
+);
+int sc_save_seam_preview(
+    const char *path,
+    const ScImage *above,
+    const ScImage *below,
+    int crop
+);
 
 int sc_pick_region_interactive(ScRegion *region);
 void sc_countdown(int seconds, const char *message);
@@ -100,6 +135,7 @@ int sc_focus_region(const ScRegion *region);
 void sc_scroll_wheel_at(const ScRegion *region, const ScScrollSettings *scroll);
 
 int sc_capture_region(const ScRegion *region, ScImage *out);
+int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out);
 int sc_save_png(const char *path, const ScImage *img);
 int sc_mkdir_p(const char *path);
 void sc_sleep_ms(int milliseconds);
@@ -113,12 +149,13 @@ int sc_capture_long_page(
     double settle_delay,
     int max_frames,
     double same_frame_threshold,
-    int expected_overlap,
+    int safe_stitch,
     const char *save_frames_dir,
     ScFrameList *frames,
-    int *overlaps,
-    int *overlap_count,
-    int *reached_end
+    int *crops,
+    int *crop_count,
+    int *reached_end,
+    ScStitchLog *log
 );
 
 #endif

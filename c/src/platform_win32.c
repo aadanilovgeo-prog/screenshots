@@ -211,8 +211,7 @@ int sc_make_default_output_path(char *buf, size_t buflen) {
     return snprintf(
         buf,
         buflen,
-        "scroll_capture_v%s_%04d%02d%02d_%02d%02d%02d.png",
-        SC_VERSION,
+        "long_screenshot_%04d-%02d-%02d_%02d-%02d-%02d.png",
         st.wYear,
         st.wMonth,
         st.wDay,
@@ -271,7 +270,7 @@ void sc_countdown(int seconds, const char *message) {
 }
 
 int sc_make_default_output_path(char *buf, size_t buflen) {
-    return snprintf(buf, buflen, "scroll_capture.png");
+    return snprintf(buf, buflen, "long_screenshot.png");
 }
 
 #endif

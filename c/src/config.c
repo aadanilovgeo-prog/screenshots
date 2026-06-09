@@ -36,8 +36,8 @@ void sc_config_print_help(const char *prog) {
         "  --region L,T,W,H         Capture region\n"
         "  -o, --output FILE        Output PNG path\n"
         "  --countdown N            Seconds before start (default 5)\n"
-        "  --wheel-notches N        Wheel notches per step (default 10)\n"
-        "  --micro-steps N          Micro-scroll steps per step (default 10)\n"
+        "  --wheel-notches N        Wheel notches per scroll step (default 10)\n"
+        "  --micro-steps N          Micro-scroll steps per step (default 8)\n"
         "  --micro-delay SEC        Delay between micro-scrolls (0.04)\n"
         "  --no-focus-click         Skip initial focus click\n"
         "  --focus-each-step        Click before each scroll step\n"
@@ -45,8 +45,9 @@ void sc_config_print_help(const char *prog) {
         "  --settle-delay SEC       Delay after screenshot (0.15)\n"
         "  --max-frames N           Frame limit (600)\n"
         "  --same-frame-threshold X End-of-page threshold (0.002)\n"
-        "  --expected-overlap N     Expected overlap px (0=auto)\n"
-        "  --save-frames DIR        Save debug frames to folder\n"
+        "  --no-safe-stitch         Disable safe stitch (not recommended)\n"
+        "  --save-frames DIR        Save frames, seam previews, stitch_log.txt\n"
+        "  --version                Show version\n"
         "  -h, --help               Show help\n",
         prog
     );
@@ -68,12 +69,15 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
     cfg->settle_delay = 0.15;
     cfg->max_frames = SC_MAX_FRAMES;
     cfg->same_frame_threshold = 0.002;
+    cfg->safe_stitch = 1;
 
     for (i = 1; i < argc; i++) {
         const char *arg = argv[i];
         if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
             sc_config_print_help(argv[0]);
             return 0;
+        } else if (strcmp(arg, "--version") == 0) {
+            return 2;
         } else if (strcmp(arg, "--region") == 0 && i + 1 < argc) {
             if (!parse_region(argv[++i], &cfg->region)) {
                 fprintf(stderr, "Invalid --region format (use left,top,width,height)\n");
@@ -113,8 +117,8 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
             if (!parse_double(argv[++i], &cfg->same_frame_threshold)) {
                 return 0;
             }
-        } else if (strcmp(arg, "--expected-overlap") == 0 && i + 1 < argc) {
-            cfg->expected_overlap = atoi(argv[++i]);
+        } else if (strcmp(arg, "--no-safe-stitch") == 0) {
+            cfg->safe_stitch = 0;
         } else if (strcmp(arg, "--save-frames") == 0 && i + 1 < argc) {
             strncpy(cfg->save_frames_dir, argv[++i], sizeof(cfg->save_frames_dir) - 1);
             cfg->has_save_frames = 1;

@@ -5,25 +5,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SC_HEADER_SKIP_FRAC 0.12
-#define SC_SEAM_GOOD 0.045
-#define SC_SEAM_BAD 0.075
+#define SC_HEADER_SKIP_FRAC 0.10
+#define SC_SEARCH_BAND_FRAC 0.50
+#define SC_MIN_NEW_CONTENT 24
+#define SC_MIN_CROP 16
+#define SC_CONFIDENCE_GOOD 0.62
+#define SC_CONFIDENCE_WEAK 0.42
+#define SC_SEAM_GOOD 0.040
+#define SC_SEAM_WEAK 0.080
 
 typedef struct {
     float *gray;
-    float *intensity_profile;
-    float *gradient_profile;
+    float *intensity;
+    float *gradient;
+    float *edge;
     int width;
     int height;
-} MatchData;
+} FrameFeatures;
 
-static int compare_int(const void *a, const void *b) {
-    int av = *(const int *)a;
-    int bv = *(const int *)b;
-    return (av > bv) - (av < bv);
-}
+static const int CROP_OFFSETS[] = { -80, -50, -30, -20, -10, 0, 10, 20 };
+static const int CROP_OFFSET_COUNT = (int)(sizeof(CROP_OFFSETS) / sizeof(CROP_OFFSETS[0]));
 
-static float ncc(const float *a, const float *b, int len) {
+static float ncc_rows(const float *a, const float *b, int len) {
     float mean_a = 0.0f;
     float mean_b = 0.0f;
     float num = 0.0f;
@@ -53,44 +56,47 @@ static float ncc(const float *a, const float *b, int len) {
     return num / (sqrtf(den_a * den_b) + 1e-6f);
 }
 
-static void match_data_free(MatchData *md) {
-    if (!md) {
+static void features_free(FrameFeatures *f) {
+    if (!f) {
         return;
     }
-    free(md->gray);
-    free(md->intensity_profile);
-    free(md->gradient_profile);
-    memset(md, 0, sizeof(*md));
+    free(f->gray);
+    free(f->intensity);
+    free(f->gradient);
+    free(f->edge);
+    memset(f, 0, sizeof(*f));
 }
 
-static int match_data_prepare(const ScImage *img, MatchData *md) {
+static int features_prepare(const ScImage *img, FrameFeatures *f) {
     int x;
     int y;
     int margin_x;
     int cropped_w;
 
-    if (!img || !img->rgb || !md) {
+    if (!img || !img->rgb || !f) {
         return 0;
     }
 
-    memset(md, 0, sizeof(*md));
-    md->width = img->width;
-    md->height = img->height;
-    margin_x = img->width / 8;
+    memset(f, 0, sizeof(*f));
+    f->height = img->height;
+    f->width = img->width;
+
+    margin_x = img->width / 10;
     if (margin_x < 8) {
         margin_x = 8;
     }
     cropped_w = img->width - margin_x * 2;
-    if (cropped_w < 8) {
+    if (cropped_w < 16) {
         return 0;
     }
 
-    md->intensity_profile = (float *)malloc((size_t)img->height * sizeof(float));
-    md->gradient_profile = (float *)malloc((size_t)img->height * sizeof(float));
-    md->gray = (float *)malloc((size_t)cropped_w * (size_t)img->height * sizeof(float));
+    f->intensity = (float *)malloc((size_t)img->height * sizeof(float));
+    f->gradient = (float *)malloc((size_t)img->height * sizeof(float));
+    f->edge = (float *)malloc((size_t)img->height * sizeof(float));
+    f->gray = (float *)malloc((size_t)cropped_w * (size_t)img->height * sizeof(float));
 
-    if (!md->intensity_profile || !md->gradient_profile || !md->gray) {
-        match_data_free(md);
+    if (!f->intensity || !f->gradient || !f->edge || !f->gray) {
+        features_free(f);
         return 0;
     }
 
@@ -104,7 +110,7 @@ static int match_data_prepare(const ScImage *img, MatchData *md) {
             int src_x = x + margin_x;
             int idx = (y * img->width + src_x) * 3;
             float lum = 0.299f * img->rgb[idx] + 0.587f * img->rgb[idx + 1] + 0.114f * img->rgb[idx + 2];
-            md->gray[y * cropped_w + x] = lum;
+            f->gray[y * cropped_w + x] = lum;
             row_sum += lum;
             if (has_prev) {
                 grad_sum += fabsf(lum - prev);
@@ -113,31 +119,154 @@ static int match_data_prepare(const ScImage *img, MatchData *md) {
             has_prev = 1;
         }
 
-        md->intensity_profile[y] = row_sum / (float)cropped_w;
-        md->gradient_profile[y] = grad_sum / (float)cropped_w;
+        f->intensity[y] = row_sum / (float)cropped_w;
+        f->gradient[y] = grad_sum / (float)cropped_w;
     }
 
-    md->width = cropped_w;
+    f->edge[0] = f->gradient[0];
+    for (y = 1; y < img->height; y++) {
+        f->edge[y] = fabsf(f->intensity[y] - f->intensity[y - 1]) + f->gradient[y] * 0.35f;
+    }
+
+    f->width = cropped_w;
     return 1;
 }
 
-static double seam_mean_diff(const ScImage *above, const ScImage *below, int overlap) {
+static int overlap_band_rows(
+    int crop,
+    int height,
+    int *y_start,
+    int *y_end,
+    int skip_top
+) {
+    int band_lo = (int)(height * (1.0 - SC_SEARCH_BAND_FRAC));
+    int band_hi = (int)(height * SC_SEARCH_BAND_FRAC);
+    int overlap_lo = height - crop;
+    int start = overlap_lo > band_lo ? overlap_lo : band_lo;
+    int end = crop < band_hi ? crop : band_hi;
+
+    start += skip_top;
+    if (start < overlap_lo + skip_top) {
+        start = overlap_lo + skip_top;
+    }
+    if (end > crop) {
+        end = crop;
+    }
+    if (end - start < 12) {
+        start = skip_top;
+        end = crop;
+    }
+    *y_start = start;
+    *y_end = end;
+    return end > start;
+}
+
+static double band_ssd_rows(
+    const FrameFeatures *above,
+    const FrameFeatures *below,
+    int crop,
+    int y_start,
+    int y_end,
+    int x0,
+    int x1
+) {
+    int y;
+    int x;
+    double ssd = 0.0;
+    int pixels = 0;
+    int ha = above->height;
+    int row_a_start = ha - crop;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (x1 > above->width) {
+        x1 = above->width;
+    }
+    if (x0 >= x1 || y_end <= y_start) {
+        return 1e9;
+    }
+
+    for (y = y_start; y < y_end; y++) {
+        int ya = row_a_start + y;
+        const float *row_a = above->gray + ya * above->width;
+        const float *row_b = below->gray + y * below->width;
+        for (x = x0; x < x1; x++) {
+            ssd += fabs((double)row_a[x] - (double)row_b[x]);
+            pixels++;
+        }
+    }
+
+    return pixels > 0 ? ssd / (double)pixels : 1e9;
+}
+
+static double crop_match_cost(
+    const FrameFeatures *above,
+    const FrameFeatures *below,
+    int crop,
+    int skip_top
+) {
+    int ha = above->height;
+    int hb = below->height;
+    int w = above->width;
+    int s1 = w / 4;
+    int s2 = w / 2;
+    int y_start;
+    int y_end;
+    double ssd;
+    float ncc_i;
+    float ncc_g;
+    float ncc_e;
+    double crop_frac;
+    double penalty;
+
+    if (crop < skip_top + 8 || crop >= ha - SC_MIN_NEW_CONTENT || crop >= hb - 4) {
+        return 1e9;
+    }
+    if (!overlap_band_rows(crop, ha, &y_start, &y_end, skip_top)) {
+        return 1e9;
+    }
+
+    ssd = (
+        band_ssd_rows(above, below, crop, y_start, y_end, 0, s1) +
+        band_ssd_rows(above, below, crop, y_start, y_end, s1, s2) +
+        band_ssd_rows(above, below, crop, y_start, y_end, s2, w)
+    ) / 3.0;
+
+    ncc_i = ncc_rows(above->intensity + ha - crop + y_start, below->intensity + y_start, y_end - y_start);
+    ncc_g = ncc_rows(above->gradient + ha - crop + y_start, below->gradient + y_start, y_end - y_start);
+    ncc_e = ncc_rows(above->edge + ha - crop + y_start, below->edge + y_start, y_end - y_start);
+
+    crop_frac = (double)crop / (double)ha;
+    penalty = 0.0;
+    if (crop_frac > 0.72) {
+        penalty += (crop_frac - 0.72) * 40.0;
+    }
+
+    return ssd - 50.0 * (double)ncc_i - 28.0 * (double)ncc_g - 18.0 * (double)ncc_e + penalty;
+}
+
+
+double sc_evaluate_seam(const ScImage *above, const ScImage *below, int crop) {
     int y;
     int x;
     int w = above->width;
     int ha = above->height;
     long long sum = 0;
     int pixels = 0;
-    int skip = (int)(overlap * SC_HEADER_SKIP_FRAC);
-    int check_rows = overlap - skip;
+    int skip = (int)(crop * SC_HEADER_SKIP_FRAC);
+    int check_rows = crop - skip;
 
+    if (crop < 8) {
+        return 1.0;
+    }
     if (check_rows < 8) {
         skip = 0;
-        check_rows = overlap;
+        check_rows = crop;
     }
 
-    for (y = skip; y < overlap; y++) {
-        const unsigned char *ra = above->rgb + (size_t)(ha - overlap + y) * (size_t)w * 3u;
+    for (y = skip; y < crop; y++) {
+        const unsigned char *ra = above->rgb + (size_t)(ha - crop + y) * (size_t)w * 3u;
         const unsigned char *rb = below->rgb + (size_t)y * (size_t)w * 3u;
         for (x = 0; x < w; x += 2) {
             sum += abs((int)ra[x * 3] - (int)rb[x * 3]);
@@ -153,341 +282,343 @@ static double seam_mean_diff(const ScImage *above, const ScImage *below, int ove
     return (sum / (double)pixels) / 255.0;
 }
 
-static double strip_ssd(
-    const MatchData *above,
-    const MatchData *below,
-    int overlap,
-    int x0,
-    int x1,
-    int skip_top
-) {
+static double table_seam_risk(const FrameFeatures *above, const FrameFeatures *below, int crop) {
+    int ha = above->height;
     int y;
-    int x;
-    double ssd = 0.0;
-    int pixels = 0;
+    double edge_above = 0.0;
+    double edge_below = 0.0;
+    double edge_seam = 0.0;
+    int count = 0;
 
-    if (x0 < 0) {
-        x0 = 0;
-    }
-    if (x1 > above->width) {
-        x1 = above->width;
-    }
-    if (x0 >= x1) {
-        return 1e9;
-    }
-
-    for (y = skip_top; y < overlap; y++) {
-        const float *row_a = above->gray + (above->height - overlap + y) * above->width;
-        const float *row_b = below->gray + y * below->width;
-        for (x = x0; x < x1; x++) {
-            ssd += fabs((double)row_a[x] - (double)row_b[x]);
-            pixels++;
+    for (y = crop - 6; y < crop + 6; y++) {
+        if (y >= 1 && y < ha) {
+            edge_above += (double)above->edge[y];
+            count++;
         }
     }
-    return pixels > 0 ? ssd / (double)pixels : 1e9;
+    for (y = crop - 6; y < crop + 6; y++) {
+        if (y >= 0 && y < below->height) {
+            edge_below += (double)below->edge[y];
+        }
+    }
+    if (crop >= 0 && crop < below->height) {
+        edge_seam = (double)below->edge[crop];
+    }
+
+    if (count <= 0) {
+        return 0.5;
+    }
+
+    edge_above /= (double)count;
+    edge_below /= (double)count;
+
+    if (edge_seam > (edge_above + edge_below) * 0.55 + 0.8) {
+        return fmin(1.0, (edge_seam - edge_above) / 8.0);
+    }
+    return 0.05;
 }
 
-static double overlap_cost(
-    const MatchData *above,
-    const MatchData *below,
-    int overlap,
-    int preferred_overlap,
-    int has_preferred,
-    int skip_top
+static double image_seam_risk(
+    const FrameFeatures *above,
+    const FrameFeatures *below,
+    int crop,
+    double seam_diff
 ) {
-    int w = above->width;
-    int s1 = w / 4;
-    int s2 = w / 2;
-    double ssd_left = strip_ssd(above, below, overlap, 0, s1, skip_top);
-    double ssd_mid = strip_ssd(above, below, overlap, s1, s2, skip_top);
-    double ssd_right = strip_ssd(above, below, overlap, s2, w, skip_top);
-    double ssd = (ssd_left + ssd_mid + ssd_right) / 3.0;
-    float ncc_int;
-    float ncc_grad;
-    double cost;
+    int ha = above->height;
+    int y;
+    double local_grad = 0.0;
+    int count = 0;
 
-    ncc_int = ncc(
-        above->intensity_profile + above->height - overlap,
-        below->intensity_profile,
-        overlap
-    );
-    ncc_grad = ncc(
-        above->gradient_profile + above->height - overlap,
-        below->gradient_profile,
-        overlap
-    );
-
-    cost = ssd - 45.0 * (double)ncc_int - 25.0 * (double)ncc_grad;
-
-    if (has_preferred) {
-        if (overlap > preferred_overlap) {
-            cost += 0.25 * (double)(overlap - preferred_overlap);
-        } else {
-            cost += 0.12 * (double)(preferred_overlap - overlap);
+    for (y = ha - crop - 8; y < ha - crop + 8; y++) {
+        if (y >= 0 && y < ha) {
+            local_grad += (double)above->gradient[y];
+            count++;
         }
     }
-    return cost;
+    for (y = crop - 8; y < crop + 8; y++) {
+        if (y >= 0 && y < below->height) {
+            local_grad += (double)below->gradient[y];
+            count++;
+        }
+    }
+
+    if (count <= 0) {
+        return seam_diff;
+    }
+
+    local_grad /= (double)count;
+    if (local_grad > 6.0 && seam_diff > SC_SEAM_GOOD) {
+        return fmin(1.0, seam_diff + local_grad / 40.0);
+    }
+    return seam_diff * 0.6;
 }
 
-static int refine_overlap_by_seam(
-    const ScImage *above,
-    const ScImage *below,
-    int overlap,
-    int min_overlap,
-    int max_overlap,
-    int expected_overlap
-) {
-    double seam = seam_mean_diff(above, below, overlap);
-    int best = overlap;
-    int delta;
-
-    if (seam <= SC_SEAM_GOOD) {
-        return overlap;
-    }
-
-    for (delta = 2; delta <= 50; delta += 2) {
-        int up = overlap + delta;
-        if (up <= max_overlap) {
-            double s = seam_mean_diff(above, below, up);
-            if (s < seam) {
-                seam = s;
-                best = up;
-            }
-        }
-        if (seam <= SC_SEAM_GOOD) {
-            return best;
-        }
-    }
-
-    if (seam > SC_SEAM_BAD) {
-        for (delta = 2; delta <= 30; delta += 2) {
-            int down = overlap - delta;
-            if (down >= min_overlap) {
-                double s = seam_mean_diff(above, below, down);
-                if (s < seam) {
-                    seam = s;
-                    best = down;
-                }
-            }
-            if (seam <= SC_SEAM_GOOD) {
-                return best;
-            }
-        }
-    }
-
-    if (seam > SC_SEAM_BAD && expected_overlap >= min_overlap && expected_overlap <= max_overlap) {
-        double s = seam_mean_diff(above, below, expected_overlap);
-        if (s < seam) {
-            best = expected_overlap;
-            seam = s;
-        }
-    }
-
-    if (seam > SC_SEAM_BAD) {
-        printf("  [warn] weak seam match (%.3f), overlap=%d px\n", seam, best);
-    }
-
-    return best;
-}
-
-int sc_overlap_search_bounds(
-    int frame_height,
-    int wheel_notches,
-    int expected_overlap,
-    int preferred_overlap,
-    int has_preferred,
-    int *min_overlap,
-    int *max_overlap
-) {
-    int estimated_scroll = wheel_notches * SC_PX_PER_WHEEL_NOTCH;
-    int min_o;
-    int max_o;
-
-    if (estimated_scroll < 40) {
-        estimated_scroll = 40;
-    }
-
-    if (has_preferred) {
-        min_o = preferred_overlap - 22;
-        max_o = preferred_overlap + 18;
-    } else if (expected_overlap > 0) {
-        min_o = expected_overlap - 70;
-        max_o = expected_overlap + 35;
+static double estimate_confidence(double best_cost, double second_cost, double seam_diff) {
+    double gap = second_cost - best_cost;
+    double conf = 0.35 + fmin(0.45, gap / 8.0);
+    if (seam_diff <= SC_SEAM_GOOD) {
+        conf += 0.18;
+    } else if (seam_diff <= SC_SEAM_WEAK) {
+        conf += 0.06;
     } else {
-        int min_scroll = (int)(estimated_scroll * 0.82);
-        int max_scroll = (int)(estimated_scroll * 1.08);
-        min_o = frame_height - max_scroll;
-        max_o = frame_height - min_scroll;
+        conf -= 0.12;
     }
-
-    if (min_o < 40) {
-        min_o = 40;
+    if (conf < 0.0) {
+        conf = 0.0;
     }
-    if (max_o > frame_height - 30) {
-        max_o = frame_height - 30;
+    if (conf > 1.0) {
+        conf = 1.0;
     }
-    if (min_o >= max_o) {
-        min_o = 40;
-        max_o = frame_height - 30;
-    }
-
-    *min_overlap = min_o;
-    *max_overlap = max_o;
-    return 1;
+    return conf;
 }
 
-ScOverlapMatch sc_find_vertical_overlap(
+int sc_detect_vertical_content_shift(
     const ScImage *above,
     const ScImage *below,
-    int min_overlap,
-    int max_overlap,
-    int preferred_overlap,
-    int has_preferred
+    ScShiftData *out
 ) {
-    MatchData ma;
-    MatchData mb;
-    ScOverlapMatch result;
-    int overlap;
-    int best_overlap;
+    FrameFeatures fa;
+    FrameFeatures fb;
+    int height;
+    int min_crop;
+    int max_crop;
+    int skip_top;
+    int crop;
+    int best_crop;
+    int second_crop;
     double best_cost;
+    double second_cost;
+    double cost;
     int fine_min;
     int fine_max;
-    int skip_top;
-    int expected = has_preferred ? preferred_overlap : (min_overlap + max_overlap) / 2;
 
-    result.overlap = 20;
-    result.score = 1.0;
-
-    if (!match_data_prepare(above, &ma) || !match_data_prepare(below, &mb)) {
-        return result;
+    if (!above || !below || !out) {
+        return 0;
     }
 
-    skip_top = (int)(ma.height * SC_HEADER_SKIP_FRAC);
+    memset(out, 0, sizeof(*out));
+    height = above->height < below->height ? above->height : below->height;
+
+    if (!features_prepare(above, &fa) || !features_prepare(below, &fb)) {
+        features_free(&fa);
+        features_free(&fb);
+        return 0;
+    }
+
+    skip_top = (int)(height * SC_HEADER_SKIP_FRAC);
     if (skip_top < 6) {
         skip_top = 6;
     }
 
-    {
-        int height = ma.height < mb.height ? ma.height : mb.height;
-        if (max_overlap > height - 20) {
-            max_overlap = height - 20;
-        }
-        if (max_overlap > ma.height - 10) {
-            max_overlap = ma.height - 10;
-        }
-        if (max_overlap > mb.height - 10) {
-            max_overlap = mb.height - 10;
+    min_crop = SC_MIN_CROP;
+    max_crop = height - SC_MIN_NEW_CONTENT;
+    if (max_crop <= min_crop + 20) {
+        min_crop = height / 6;
+        max_crop = height - 8;
+    }
+
+    best_crop = min_crop;
+    second_crop = min_crop + 2;
+    best_cost = 1e300;
+    second_cost = 1e300;
+
+    for (crop = min_crop; crop <= max_crop; crop += 2) {
+        cost = crop_match_cost(&fa, &fb, crop, skip_top);
+        if (cost < best_cost) {
+            second_cost = best_cost;
+            second_crop = best_crop;
+            best_cost = cost;
+            best_crop = crop;
+        } else if (cost < second_cost) {
+            second_cost = cost;
+            second_crop = crop;
         }
     }
 
-    if (min_overlap < skip_top + 10) {
-        min_overlap = skip_top + 10;
+    fine_min = best_crop - 16;
+    fine_max = best_crop + 16;
+    if (fine_min < min_crop) {
+        fine_min = min_crop;
     }
-    if (min_overlap >= max_overlap) {
-        result.overlap = min_overlap < max_overlap ? min_overlap : max_overlap;
-        match_data_free(&ma);
-        match_data_free(&mb);
+    if (fine_max > max_crop) {
+        fine_max = max_crop;
+    }
+
+    for (crop = fine_min; crop <= fine_max; crop++) {
+        cost = crop_match_cost(&fa, &fb, crop, skip_top);
+        if (cost < best_cost) {
+            second_cost = best_cost;
+            second_crop = best_crop;
+            best_cost = cost;
+            best_crop = crop;
+        } else if (cost < second_cost) {
+            second_cost = cost;
+            second_crop = crop;
+        }
+    }
+
+    {
+        double seam = sc_evaluate_seam(above, below, best_crop);
+        out->detected_shift = height - best_crop;
+        out->detected_overlap = best_crop;
+        out->initial_crop = best_crop;
+        out->match_score = best_cost;
+        out->confidence = estimate_confidence(best_cost, second_cost, seam);
+        (void)second_crop;
+    }
+
+    features_free(&fa);
+    features_free(&fb);
+    return 1;
+}
+
+ScSafeCrop sc_choose_safe_crop(
+    const ScImage *above,
+    const ScImage *below,
+    const ScShiftData *shift,
+    int safe_mode
+) {
+    FrameFeatures fa;
+    FrameFeatures fb;
+    ScSafeCrop result;
+    int height;
+    int min_crop;
+    int max_crop;
+    int i;
+    int best_idx = 0;
+    double best_key = 1e300;
+    int initial;
+
+    memset(&result, 0, sizeof(result));
+    if (!above || !below || !shift) {
+        result.crop = SC_MIN_CROP;
         return result;
     }
 
-    best_overlap = min_overlap;
-    best_cost = 1e300;
+    initial = shift->initial_crop > 0 ? shift->initial_crop : shift->detected_overlap;
+    if (initial < SC_MIN_CROP) {
+        initial = SC_MIN_CROP;
+    }
 
-    for (overlap = min_overlap; overlap <= max_overlap; overlap += 2) {
-        double cost = overlap_cost(&ma, &mb, overlap, preferred_overlap, has_preferred, skip_top);
-        if (cost < best_cost) {
-            best_cost = cost;
-            best_overlap = overlap;
+    height = above->height < below->height ? above->height : below->height;
+    min_crop = SC_MIN_CROP;
+    max_crop = height - SC_MIN_NEW_CONTENT;
+    if (max_crop <= min_crop) {
+        max_crop = min_crop + 1;
+    }
+
+    if (!features_prepare(above, &fa) || !features_prepare(below, &fb)) {
+        result.crop = initial;
+        result.initial_crop = initial;
+        result.confidence = shift->confidence;
+        result.safe_mode = safe_mode;
+        result.content_loss_risk = 0.5;
+        result.duplicate_risk = 0.5;
+        features_free(&fa);
+        features_free(&fb);
+        return result;
+    }
+
+    result.initial_crop = initial;
+    result.confidence = shift->confidence;
+    result.safe_mode = safe_mode;
+
+    for (i = 0; i < CROP_OFFSET_COUNT; i++) {
+        int candidate = initial + CROP_OFFSETS[i];
+        double seam;
+        double content_loss;
+        double duplicate;
+        double table_risk;
+        double image_risk;
+        double key;
+        int weak;
+
+        if (candidate < min_crop) {
+            candidate = min_crop;
+        }
+        if (candidate > max_crop) {
+            candidate = max_crop;
+        }
+
+        seam = sc_evaluate_seam(above, below, candidate);
+        weak = seam > SC_SEAM_WEAK;
+
+        content_loss = (double)(candidate - min_crop) / (double)(max_crop - min_crop + 1);
+        duplicate = (double)(max_crop - candidate) / (double)(max_crop - min_crop + 1);
+
+        if (candidate > initial) {
+            content_loss += 0.08 * (double)(candidate - initial) / (double)height;
+        }
+        if (candidate < initial) {
+            duplicate += 0.06 * (double)(initial - candidate) / (double)height;
+        }
+
+        table_risk = table_seam_risk(&fa, &fb, candidate);
+        image_risk = image_seam_risk(&fa, &fb, candidate, seam);
+
+        if (weak) {
+            content_loss += 0.12;
+        }
+        if (safe_mode) {
+            if (shift->confidence < SC_CONFIDENCE_WEAK) {
+                content_loss += 0.15 * (double)(candidate - min_crop) / (double)height;
+                duplicate -= 0.04;
+            } else if (shift->confidence < SC_CONFIDENCE_GOOD) {
+                content_loss += 0.08 * (double)(candidate - initial) / (double)height;
+            }
+            if (table_risk > 0.35 || image_risk > 0.25) {
+                content_loss += 0.10;
+                duplicate -= 0.05;
+            }
+        }
+
+        key = content_loss * 1000.0 + table_risk * 120.0 + image_risk * 150.0 + duplicate * 40.0 + seam * 80.0;
+
+        if (safe_mode && shift->confidence < SC_CONFIDENCE_GOOD) {
+            if (candidate > initial) {
+                key += 25.0 * (double)(candidate - initial);
+            }
+        }
+
+        if (key < best_key) {
+            best_key = key;
+            best_idx = i;
+            result.crop = candidate;
+            result.content_loss_risk = content_loss;
+            result.duplicate_risk = duplicate;
+            result.table_seam_risk = table_risk;
+            result.image_seam_risk = image_risk;
+            result.weak_seam = weak;
         }
     }
 
-    fine_min = best_overlap - 10;
-    fine_max = best_overlap + 10;
-    if (fine_min < min_overlap) {
-        fine_min = min_overlap;
-    }
-    if (fine_max > max_overlap) {
-        fine_max = max_overlap;
+    if (safe_mode && result.confidence < SC_CONFIDENCE_WEAK && result.crop > initial) {
+        result.crop = initial;
+        result.content_loss_risk = fmin(result.content_loss_risk, 0.35);
+        result.duplicate_risk = fmax(result.duplicate_risk, 0.25);
     }
 
-    for (overlap = fine_min; overlap <= fine_max; overlap++) {
-        double cost = overlap_cost(&ma, &mb, overlap, preferred_overlap, has_preferred, skip_top);
-        if (cost < best_cost) {
-            best_cost = cost;
-            best_overlap = overlap;
+    if (safe_mode && result.weak_seam && result.crop > initial - 10) {
+        result.crop = initial - 10;
+        if (result.crop < min_crop) {
+            result.crop = min_crop;
         }
+        result.duplicate_risk = fmax(result.duplicate_risk, 0.20);
     }
 
-    best_overlap = refine_overlap_by_seam(above, below, best_overlap, min_overlap, max_overlap, expected);
-
-    result.overlap = best_overlap;
-    result.score = best_cost;
-
-    match_data_free(&ma);
-    match_data_free(&mb);
+    (void)best_idx;
+    features_free(&fa);
+    features_free(&fb);
     return result;
 }
 
-int sc_stabilize_overlaps(int *overlaps, int count) {
-    int *copy;
-    int median;
-    int i;
-
-    if (!overlaps || count <= 2) {
-        return count;
-    }
-
-    copy = (int *)malloc((size_t)count * sizeof(int));
-    if (!copy) {
-        return count;
-    }
-
-    memcpy(copy, overlaps, (size_t)count * sizeof(int));
-    qsort(copy, (size_t)count, sizeof(int), compare_int);
-    median = copy[count / 2];
-
-    for (i = 0; i < count; i++) {
-        if (abs(overlaps[i] - median) > 50) {
-            overlaps[i] = median;
-        } else if (overlaps[i] > median + 20) {
-            overlaps[i] = median + 8;
-        } else if (overlaps[i] < median - 20) {
-            overlaps[i] = median - 8;
-        }
-    }
-
-    for (i = 0; i < count; i++) {
-        int start = i - 1;
-        int end = i + 2;
-        int window[3];
-        int wcount = 0;
-        int j;
-
-        if (start < 0) {
-            start = 0;
-        }
-        if (end > count) {
-            end = count;
-        }
-
-        for (j = start; j < end; j++) {
-            window[wcount++] = overlaps[j];
-        }
-        qsort(window, (size_t)wcount, sizeof(int), compare_int);
-        overlaps[i] = window[wcount / 2];
-    }
-
-    free(copy);
-    return count;
+ScImage *sc_append_frame_safely(const ScImage *result, const ScImage *frame, int safe_crop) {
+    return sc_image_append_crop(result, frame, safe_crop);
 }
 
-ScImage *sc_stitch_frames(const ScFrameList *frames, const int *overlaps, int overlap_count) {
+ScImage *sc_stitch_frames_safe(const ScFrameList *frames, const int *crops, int crop_count) {
+    ScImage *result = NULL;
     int i;
-    int total_height = 0;
-    int overlap;
-    ScImage *result;
-    unsigned char *dst;
-    int y = 0;
 
     if (!frames || frames->count == 0) {
         return NULL;
@@ -495,54 +626,190 @@ ScImage *sc_stitch_frames(const ScFrameList *frames, const int *overlaps, int ov
     if (frames->count == 1) {
         return sc_image_copy(frames->items[0]);
     }
-    if (!overlaps || overlap_count != frames->count - 1) {
+    if (!crops || crop_count != frames->count - 1) {
         return NULL;
     }
 
-    total_height = frames->items[0]->height;
-    for (i = 1; i < frames->count; i++) {
-        overlap = overlaps[i - 1];
-        if (overlap < 1) {
-            overlap = 1;
-        }
-        if (overlap > frames->items[i]->height - 1) {
-            overlap = frames->items[i]->height - 1;
-        }
-        total_height += frames->items[i]->height - overlap;
-    }
-
-    result = sc_image_create(frames->items[0]->width, total_height);
+    result = sc_image_copy(frames->items[0]);
     if (!result) {
         return NULL;
     }
 
-    dst = result->rgb;
-    memcpy(dst, frames->items[0]->rgb, (size_t)frames->items[0]->width * (size_t)frames->items[0]->height * 3u);
-    y = frames->items[0]->height;
-
     for (i = 1; i < frames->count; i++) {
-        int src_h;
-        int row_bytes;
-        int src_y;
-        overlap = overlaps[i - 1];
-        if (overlap < 1) {
-            overlap = 1;
+        ScImage *next = sc_append_frame_safely(result, frames->items[i], crops[i - 1]);
+        if (!next) {
+            sc_image_free(result);
+            return NULL;
         }
-        if (overlap > frames->items[i]->height - 1) {
-            overlap = frames->items[i]->height - 1;
-        }
-
-        src_h = frames->items[i]->height - overlap;
-        row_bytes = frames->items[i]->width * 3;
-        for (src_y = 0; src_y < src_h; src_y++) {
-            memcpy(
-                dst + (size_t)(y + src_y) * (size_t)row_bytes,
-                frames->items[i]->rgb + (size_t)(overlap + src_y) * (size_t)row_bytes,
-                (size_t)row_bytes
-            );
-        }
-        y += src_h;
+        sc_image_free(result);
+        result = next;
     }
 
     return result;
+}
+
+void sc_stitch_log_init(ScStitchLog *log, const char *debug_dir) {
+    char log_path[600];
+
+    if (!log) {
+        return;
+    }
+
+    memset(log, 0, sizeof(*log));
+    if (!debug_dir || !debug_dir[0]) {
+        return;
+    }
+
+    strncpy(log->debug_dir, debug_dir, sizeof(log->debug_dir) - 1);
+    log->has_debug_dir = 1;
+    sc_mkdir_p(debug_dir);
+
+    snprintf(log_path, sizeof(log_path), "%s/stitch_log.txt", debug_dir);
+    log->log_file = fopen(log_path, "w");
+    if (log->log_file) {
+        fprintf(log->log_file, "scroll_capture safe stitch log\n");
+        fflush(log->log_file);
+    }
+}
+
+void sc_stitch_log_close(ScStitchLog *log) {
+    if (!log) {
+        return;
+    }
+    if (log->log_file) {
+        fclose(log->log_file);
+        log->log_file = NULL;
+    }
+}
+
+void sc_stitch_log_frame(
+    ScStitchLog *log,
+    int frame_index,
+    const ScShiftData *shift,
+    const ScSafeCrop *crop,
+    int end_of_page
+) {
+    if (!log || !shift || !crop) {
+        return;
+    }
+
+    printf(
+        "  Frame %04d: shift=%dpx overlap=%dpx initial_crop=%d final_crop=%d "
+        "confidence=%.2f safe_mode=%d dup_risk=%.3f loss_risk=%.3f "
+        "table_risk=%.3f image_risk=%.3f%s\n",
+        frame_index,
+        shift->detected_shift,
+        shift->detected_overlap,
+        crop->initial_crop,
+        crop->crop,
+        crop->confidence,
+        crop->safe_mode,
+        crop->duplicate_risk,
+        crop->content_loss_risk,
+        crop->table_seam_risk,
+        crop->image_seam_risk,
+        crop->weak_seam ? " WEAK_SEAM" : ""
+    );
+
+    if (!log->log_file) {
+        return;
+    }
+
+    fprintf(
+        log->log_file,
+        "Frame=%d\n"
+        "DetectedShift=%d\n"
+        "DetectedOverlap=%d\n"
+        "InitialCrop=%d\n"
+        "FinalSafeCrop=%d\n"
+        "Confidence=%.4f\n"
+        "SafeMode=%d\n"
+        "DuplicateRisk=%.4f\n"
+        "ContentLossRisk=%.4f\n"
+        "TableSeamRisk=%.4f\n"
+        "ImageSeamRisk=%.4f\n"
+        "WeakSeam=%d\n"
+        "EndOfPage=%d\n\n",
+        frame_index,
+        shift->detected_shift,
+        shift->detected_overlap,
+        crop->initial_crop,
+        crop->crop,
+        crop->confidence,
+        crop->safe_mode,
+        crop->duplicate_risk,
+        crop->content_loss_risk,
+        crop->table_seam_risk,
+        crop->image_seam_risk,
+        crop->weak_seam,
+        end_of_page
+    );
+    fflush(log->log_file);
+}
+
+int sc_save_seam_preview(
+    const char *path,
+    const ScImage *above,
+    const ScImage *below,
+    int crop
+) {
+    ScImage *preview;
+    int w;
+    int strip_h;
+    int y;
+    int row_bytes;
+
+    if (!path || !above || !below || !above->rgb || !below->rgb) {
+        return 0;
+    }
+
+    w = above->width;
+    strip_h = 80;
+    if (crop < strip_h) {
+        strip_h = crop;
+    }
+    if (strip_h < 8) {
+        strip_h = 8;
+    }
+
+    preview = sc_image_create(w, strip_h * 2 + 4);
+    if (!preview) {
+        return 0;
+    }
+
+    row_bytes = w * 3;
+    for (y = 0; y < strip_h; y++) {
+        int src_y = above->height - strip_h + y;
+        if (src_y < 0) {
+            src_y = 0;
+        }
+        memcpy(
+            preview->rgb + (size_t)y * (size_t)row_bytes,
+            above->rgb + (size_t)src_y * (size_t)row_bytes,
+            (size_t)row_bytes
+        );
+    }
+
+    memset(preview->rgb + (size_t)strip_h * (size_t)row_bytes, 255, (size_t)row_bytes * 4u);
+
+    for (y = 0; y < strip_h; y++) {
+        int src_y = crop - strip_h + y;
+        if (src_y < 0) {
+            src_y = y;
+        }
+        if (src_y >= below->height) {
+            src_y = below->height - 1;
+        }
+        memcpy(
+            preview->rgb + (size_t)(strip_h + 4 + y) * (size_t)row_bytes,
+            below->rgb + (size_t)src_y * (size_t)row_bytes,
+            (size_t)row_bytes
+        );
+    }
+
+    {
+        int ok = sc_save_png(path, preview);
+        sc_image_free(preview);
+        return ok;
+    }
 }

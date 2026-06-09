@@ -2,31 +2,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include "../include/scroll_capture.h"
 
 static void fill_page(unsigned char *rgb, int w, int page_h) {
     int y, x;
     for (y = 0; y < page_h; y++) {
         for (x = 0; x < w; x++) {
-            int v = (y * 17 + x * 3) % 200 + 30;
-            rgb[(y * w + x) * 3 + 0] = (unsigned char)v;
-            rgb[(y * w + x) * 3 + 1] = (unsigned char)((v + 40) % 255);
-            rgb[(y * w + x) * 3 + 2] = (unsigned char)((v + 80) % 255);
+            int v = (y * 131 + x * 7) % 220 + 20;
+            rgb[(y * w + x) * 3 + 0] = (unsigned char)(v);
+            rgb[(y * w + x) * 3 + 1] = (unsigned char)((v + 37) % 255);
+            rgb[(y * w + x) * 3 + 2] = (unsigned char)((v + 91) % 255);
         }
     }
 }
 
 int main(void) {
     const int w = 800, h = 600, page_h = 5000;
-    const int scroll = 8 * SC_PX_PER_WHEEL_NOTCH;
+    const int scroll = 280;
     unsigned char *page = (unsigned char *)malloc((size_t)w * page_h * 3);
     ScFrameList frames;
-    int overlaps[64];
-    int overlap_count = 0;
+    int crops[64];
+    int crop_count = 0;
     int y = 0;
-    int has_preferred = 0;
-    int preferred = 0;
     ScImage *result;
 
     assert(page);
@@ -47,19 +44,25 @@ int main(void) {
     }
 
     for (int i = 0; i < frames.count - 1; i++) {
-        int min_o, max_o;
-        sc_overlap_search_bounds(h, 8, 0, preferred, has_preferred, &min_o, &max_o);
-        ScOverlapMatch m = sc_find_vertical_overlap(
-            frames.items[i], frames.items[i + 1], min_o, max_o, preferred, has_preferred);
-        overlaps[overlap_count++] = m.overlap;
-        preferred = m.overlap;
-        has_preferred = 1;
+        ScShiftData shift;
+        ScSafeCrop crop;
+        assert(sc_detect_vertical_content_shift(frames.items[i], frames.items[i + 1], &shift));
+        crop = sc_choose_safe_crop(frames.items[i], frames.items[i + 1], &shift, 1);
+        crops[crop_count++] = crop.crop;
+        printf(
+            "frame %d crop=%d shift=%d conf=%.2f loss=%.3f dup=%.3f\n",
+            i + 1,
+            crop.crop,
+            shift.detected_shift,
+            shift.confidence,
+            crop.content_loss_risk,
+            crop.duplicate_risk
+        );
     }
 
-    sc_stabilize_overlaps(overlaps, overlap_count);
-    result = sc_stitch_frames(&frames, overlaps, overlap_count);
+    result = sc_stitch_frames_safe(&frames, crops, crop_count);
     assert(result);
-    printf("stitch height=%d expected=%d\n", result->height, page_h);
+    printf("stitch height=%d expected=%d delta=%d\n", result->height, page_h, abs(result->height - page_h));
     assert(abs(result->height - page_h) < 120);
 
     sc_image_free(result);

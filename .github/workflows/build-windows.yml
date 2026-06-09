@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'c/**'
-      - 'scroll_capture.py'
+      - 'VERSION'
   workflow_dispatch:
 
 permissions:
@@ -40,7 +40,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           VER=$(tr -d '\r\n' < VERSION)
-          git add VERSION c/include/version.h scroll_capture.py c/dist/
+          git add VERSION c/include/version.h c/dist/
           git diff --staged --quiet && echo "Nothing to commit" && exit 0
           git commit -m "release: scroll_capture v${VER} [skip ci]"
           git push
