@@ -3,7 +3,7 @@
 ## Скачать
 
 ```
-c/dist/scroll_capture_v1.0.15.exe
+c/dist/scroll_capture_v1.0.16.exe
 ```
 
 ## Kaspersky / антивирус
