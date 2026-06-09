@@ -82,14 +82,6 @@ void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll
     wheel_at(x, y, notches);
 }
 
-int sc_consume_stop_request(void) {
-    if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-        sc_sleep_ms(150);
-        return 1;
-    }
-    return 0;
-}
-
 int sc_capture_region(const ScRegion *region, ScImage *out) {
     HDC screen_dc;
     HDC mem_dc;
@@ -255,10 +247,6 @@ int sc_focus_region(const ScRegion *region) {
 void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll) {
     (void)region;
     (void)scroll;
-}
-
-int sc_consume_stop_request(void) {
-    return 0;
 }
 
 int sc_capture_region(const ScRegion *region, ScImage *out) {

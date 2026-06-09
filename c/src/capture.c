@@ -82,7 +82,6 @@ int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
 }
 
 #define SC_SCROLL_END 2
-#define SC_SCROLL_STOP 3
 
 static int adaptive_scroll_to_target(
     const ScRegion *region,
@@ -114,16 +113,8 @@ static int adaptive_scroll_to_target(
     memset(shift, 0, sizeof(*shift));
 
     for (micro = 0; micro < scroll->max_micro_steps; micro++) {
-        if (sc_consume_stop_request()) {
-            return SC_SCROLL_STOP;
-        }
-
         sc_scroll_wheel_step(region, scroll);
         sc_sleep_ms((int)(scroll->micro_delay * 1000.0));
-
-        if (sc_consume_stop_request()) {
-            return SC_SCROLL_STOP;
-        }
 
         if (!sc_wait_for_frame_stable(region, current)) {
             return 0;
@@ -199,7 +190,6 @@ int sc_capture_long_page(
     int *crops,
     int *crop_count,
     int *reached_end,
-    int *user_stopped,
     ScStitchLog *log
 ) {
     ScImage *previous = NULL;
@@ -215,9 +205,6 @@ int sc_capture_long_page(
 
     *crop_count = 0;
     *reached_end = 0;
-    if (user_stopped) {
-        *user_stopped = 0;
-    }
 
     if (scroll->focus_click) {
         printf("Focusing article region (mouse click)...\n");
@@ -245,8 +232,7 @@ int sc_capture_long_page(
     }
 
     printf(
-        "Capturing (target %.0f-%.0f%% new/frame, %d notch(es)/step, safe stitch=%s).\n"
-        "Press ESC to stop capture and stitch collected frames.\n",
+        "Capturing (target %.0f-%.0f%% new/frame, %d notch(es)/step, safe stitch=%s)...\n",
         scroll->min_new_frac * 100.0,
         scroll->max_new_frac * 100.0,
         scroll->notches_per_step,
@@ -257,14 +243,6 @@ int sc_capture_long_page(
         ScShiftData shift;
         ScSafeCrop safe_crop;
         int scroll_result;
-
-        if (sc_consume_stop_request()) {
-            printf("ESC pressed — stopping capture, will stitch %d frame(s).\n", frames->count);
-            if (user_stopped) {
-                *user_stopped = 1;
-            }
-            break;
-        }
 
         current = sc_image_create(region->width, region->height);
         if (!current) {
@@ -280,14 +258,6 @@ int sc_capture_long_page(
             same_frame_threshold
         );
 
-        if (scroll_result == SC_SCROLL_STOP) {
-            printf("ESC pressed — stopping capture, will stitch %d frame(s).\n", frames->count);
-            sc_image_free(current);
-            if (user_stopped) {
-                *user_stopped = 1;
-            }
-            break;
-        }
         if (scroll_result == SC_SCROLL_END) {
             printf("End of page reached (no content change after scroll).\n");
             *reached_end = 1;
