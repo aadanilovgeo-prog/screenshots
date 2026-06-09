@@ -5,7 +5,7 @@
 ## Скачать
 
 ```
-c/dist/scroll_capture_v1.0.1.exe
+c/dist/scroll_capture_v1.0.2.exe
 ```
 
 ## Быстрый старт
@@ -27,7 +27,7 @@ c/dist/scroll_capture_v1.0.1.exe
 ## Отладка
 
 ```bat
-scroll_capture_v1.0.1.exe --save-frames ./debug
+scroll_capture_v1.0.2.exe --save-frames ./debug
 ```
 
 Сохраняет: `frame_NNNN.png`, `seam_NNNN_preview.png`, `stitch_log.txt`.
@@ -52,4 +52,4 @@ build.bat
 | `--region L,T,W,H` | Область захвата |
 | `-o file.png` | Выходной файл |
 
-Полный список: `scroll_capture_v1.0.1.exe --help`
+Полный список: `scroll_capture_v1.0.2.exe --help`

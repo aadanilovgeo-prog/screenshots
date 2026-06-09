@@ -165,7 +165,6 @@ static double band_ssd_rows(
     const FrameFeatures *above,
     const FrameFeatures *below,
     int crop,
-    int skip_top,
     int y_start,
     int y_end,
     int x0,
@@ -229,9 +228,9 @@ static double crop_match_cost(
     }
 
     ssd = (
-        band_ssd_rows(above, below, crop, skip_top, y_start, y_end, 0, s1) +
-        band_ssd_rows(above, below, crop, skip_top, y_start, y_end, s1, s2) +
-        band_ssd_rows(above, below, crop, skip_top, y_start, y_end, s2, w)
+        band_ssd_rows(above, below, crop, y_start, y_end, 0, s1) +
+        band_ssd_rows(above, below, crop, y_start, y_end, s1, s2) +
+        band_ssd_rows(above, below, crop, y_start, y_end, s2, w)
     ) / 3.0;
 
     ncc_i = ncc_rows(above->intensity + ha - crop + y_start, below->intensity + y_start, y_end - y_start);

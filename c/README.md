@@ -3,30 +3,29 @@
 ## Download
 
 ```
-c/dist/scroll_capture_v1.0.1.exe
+c/dist/scroll_capture_v1.0.2.exe
 ```
 
-Filename format: `scroll_capture_v{VERSION}.exe`
+## Safe Stitch
 
-## Local build (no version bump)
+Default mode: content shift is detected from frame pairs (not from wheel_notches × px).
+When uncertain, crop is reduced to avoid losing table rows or image content.
+
+## Local build
 
 ```bat
 cd c
 build.bat
 ```
 
-Builds exe for the **current** version from `/VERSION` without incrementing it.
-
-## Version bump
-
-Version is incremented **automatically only when changes merge to `main`** (GitHub Actions):
-1. Bump patch in `VERSION`
-2. Build `scroll_capture_vX.Y.Z.exe`
-3. Commit and push to `main`
-
-## Run
+## Debug
 
 ```bat
-scroll_capture_v1.0.1.exe
-scroll_capture_v1.0.1.exe --version
+scroll_capture_v1.0.2.exe --save-frames ./debug
 ```
+
+Saves frames, seam previews, and `stitch_log.txt`.
+
+## Output
+
+`long_screenshot_YYYY-MM-DD_HH-MM-SS.png`
