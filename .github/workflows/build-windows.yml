@@ -6,6 +6,7 @@ on:
     paths:
       - 'c/**'
       - 'VERSION'
+      - '.github/workflows/build-windows.yml'
   workflow_dispatch:
 
 permissions:
@@ -25,6 +26,9 @@ jobs:
       - name: Generate version resource
         run: python c/scripts/generate_version_rc.py
 
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Build exe (MSVC + VERSIONINFO)
         shell: cmd
         run: |
@@ -33,7 +37,10 @@ jobs:
           del /q c\dist\scroll_capture_v*.exe 2>nul
           cd c
           rc /nologo /fo scroll_capture.res scroll_capture.rc
+          if errorlevel 1 exit /b 1
           cl /nologo /O2 /W4 /Iinclude src\main.c src\config.c src\image.c src\stitch.c src\capture.c src\png_io.c src\platform_win32.c /Fe:dist\scroll_capture_v%SC_VER%.exe /link user32.lib gdi32.lib scroll_capture.res
+          if errorlevel 1 exit /b 1
+          if not exist dist\scroll_capture_v%SC_VER%.exe exit /b 1
           echo Built dist\scroll_capture_v%SC_VER%.exe
 
       - name: Commit and push release
