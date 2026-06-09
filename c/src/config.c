@@ -43,7 +43,7 @@ void sc_config_print_help(const char *prog) {
         "  --focus-each-step        Click before each scroll step\n"
         "  --scroll-delay SEC       Delay after scroll (0.8)\n"
         "  --settle-delay SEC       Delay after screenshot (0.15)\n"
-        "  --max-frames N           Frame limit (300)\n"
+        "  --max-frames N           Frame limit (600)\n"
         "  --same-frame-threshold X End-of-page threshold (0.002)\n"
         "  --expected-overlap N     Expected overlap px (0=auto)\n"
         "  --save-frames DIR        Save debug frames to folder\n"

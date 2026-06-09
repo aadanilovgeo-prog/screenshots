@@ -522,7 +522,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-frames",
         type=int,
-        default=300,
+        default=600,
         help="Максимум кадров (защита от бесконечного цикла)",
     )
     parser.add_argument(
