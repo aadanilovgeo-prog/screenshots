@@ -34,7 +34,7 @@ void sc_config_print_help(const char *prog) {
         "Usage: %s [options]\n\n"
         "Scroll is adaptive: 1 wheel notch at a time until new content reaches\n"
         "  default (height > %d): %.0f-%.0f%% of capture height\n"
-        "  small screen (height <= %d, ~13\"): %.0f-%.0f%% (2x step)\n\n"
+        "  small screen (height <= %d, ~13\"): %.0f-%.0f%%\n\n"
         "Options:\n"
         "  --region L,T,W,H         Capture region\n"
         "  -o, --output FILE        Output PNG path\n"
