@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-__version__ = "1.2.1"
+__version__ = "1.0.0"
 
 import argparse
 import ctypes
@@ -529,7 +529,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--output",
         "-o",
         type=Path,
-        help="Путь к итоговому PNG (по умолчанию scroll_capture_ДАТА.png)",
+        help="Output PNG path (default scroll_capture_vVERSION_DATE.png)",
     )
     parser.add_argument(
         "--countdown",
@@ -691,7 +691,7 @@ def main() -> int:
     output = args.output
     if output is None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output = Path(f"scroll_capture_{stamp}.png")
+        output = Path(f"scroll_capture_v{__version__}_{stamp}.png")
 
     result.save(output, format="PNG", optimize=True)
     print(f"Готово: {output.resolve()}")
