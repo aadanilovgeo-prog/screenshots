@@ -64,3 +64,13 @@ scroll_capture.exe --wheel-notches 10 --save-frames frames
 ## Зависимости
 
 Только Win32 API и встроенный `stb_image_write` (лежит в `third_party/`).
+
+
+## Version
+
+Current version is stored in `/VERSION` at repo root.
+Each build (`build.bat` or `make windows`) auto-increments the patch number.
+
+```bat
+scroll_capture.exe --version
+```
