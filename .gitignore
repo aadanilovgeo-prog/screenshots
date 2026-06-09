@@ -10,3 +10,4 @@ c/scroll_capture.exe
 !c/dist/scroll_capture.exe
 *.o
 
+!updated_screenshoter/dist/updated_screenshoter.exe
