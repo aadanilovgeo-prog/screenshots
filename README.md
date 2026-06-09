@@ -5,7 +5,7 @@
 ## Скачать
 
 ```
-c/dist/scroll_capture_v1.0.3.exe
+c/dist/scroll_capture_v1.0.4.exe
 ```
 
 ## Как работает прокрутка
@@ -22,7 +22,7 @@ c/dist/scroll_capture_v1.0.3.exe
 ## Отладка
 
 ```bat
-scroll_capture_v1.0.3.exe --save-frames ./debug
+scroll_capture_v1.0.4.exe --save-frames ./debug
 ```
 
 ## Выходной файл

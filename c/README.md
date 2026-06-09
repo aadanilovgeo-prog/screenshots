@@ -3,7 +3,7 @@
 ## Download
 
 ```
-c/dist/scroll_capture_v1.0.3.exe
+c/dist/scroll_capture_v1.0.4.exe
 ```
 
 ## Adaptive scroll
@@ -18,7 +18,7 @@ Content-shift based stitching; prefers keeping data over removing duplicates.
 ## Debug
 
 ```bat
-scroll_capture_v1.0.3.exe --save-frames ./debug
+scroll_capture_v1.0.4.exe --save-frames ./debug
 ```
 
 ## Output
