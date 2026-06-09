@@ -23,9 +23,9 @@ typedef struct {
     int height;
 } FrameFeatures;
 
-static const int CROP_OFFSETS_CONFIDENT[] = { -15, -10, -5, 0, 5 };
-static const int CROP_OFFSETS_SAFE[] = { -40, -25, -15, -10, -5, 0 };
-static const int CROP_OFFSETS_ALL[] = { -40, -25, -15, -10, -5, 0, 10, 15 };
+static const int CROP_OFFSETS_CONFIDENT[] = { 0, 5, 10, 15 };
+static const int CROP_OFFSETS_SAFE[] = { 0, 5, 10, 15, 20 };
+static const int CROP_OFFSETS_ALL[] = { 0, 5, 10, 15, 20, 25 };
 
 
 static float ncc_rows(const float *a, const float *b, int len) {
@@ -628,6 +628,10 @@ ScSafeCrop sc_choose_safe_crop(
         result.crop = initial;
         result.content_loss_risk = fmin(result.content_loss_risk, 0.35);
         result.duplicate_risk = fmax(result.duplicate_risk, 0.25);
+    }
+
+    if (result.crop < initial) {
+        result.crop = initial;
     }
 
     }
