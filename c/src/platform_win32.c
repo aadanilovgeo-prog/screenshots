@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include "scroll_capture.h"
+#include "version.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -210,7 +211,8 @@ int sc_make_default_output_path(char *buf, size_t buflen) {
     return snprintf(
         buf,
         buflen,
-        "scroll_capture_%04d%02d%02d_%02d%02d%02d.png",
+        "scroll_capture_v%s_%04d%02d%02d_%02d%02d%02d.png",
+        SC_VERSION,
         st.wYear,
         st.wMonth,
         st.wDay,
@@ -223,6 +225,7 @@ int sc_make_default_output_path(char *buf, size_t buflen) {
 #else
 
 #include "scroll_capture.h"
+#include "version.h"
 
 #include <stdio.h>
 
