@@ -18,6 +18,6 @@ windows:
 clean:
 	rm -f scroll_capture.exe dist/scroll_capture*.exe stitch_test
 
-test_stitch: src/image.c src/stitch.c tests/stitch_test.c
-	$(CC) $(CFLAGS) -DTEST_STITCH -o stitch_test src/image.c src/stitch.c tests/stitch_test.c -lm
+test_stitch: src/image.c src/stitch.c src/png_io.c src/platform_win32.c tests/stitch_test.c
+	$(CC) $(CFLAGS) -DTEST_STITCH -o stitch_test src/image.c src/stitch.c src/png_io.c src/platform_win32.c tests/stitch_test.c -lm
 	./stitch_test

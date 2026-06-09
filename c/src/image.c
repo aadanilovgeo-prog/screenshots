@@ -119,3 +119,44 @@ void sc_frame_list_clear(ScFrameList *list) {
     list->count = 0;
     list->capacity = 0;
 }
+
+ScImage *sc_image_append_crop(const ScImage *result, const ScImage *frame, int top_crop) {
+    ScImage *out;
+    int new_h;
+    int src_h;
+    int y;
+    int row_bytes;
+
+    if (!result || !frame || !result->rgb || !frame->rgb) {
+        return NULL;
+    }
+    if (result->width != frame->width) {
+        return NULL;
+    }
+
+    if (top_crop < 0) {
+        top_crop = 0;
+    }
+    if (top_crop > frame->height - 1) {
+        top_crop = frame->height - 1;
+    }
+
+    src_h = frame->height - top_crop;
+    new_h = result->height + src_h;
+    out = sc_image_create(result->width, new_h);
+    if (!out) {
+        return NULL;
+    }
+
+    row_bytes = result->width * 3;
+    memcpy(out->rgb, result->rgb, (size_t)result->height * (size_t)row_bytes);
+    for (y = 0; y < src_h; y++) {
+        memcpy(
+            out->rgb + (size_t)(result->height + y) * (size_t)row_bytes,
+            frame->rgb + (size_t)(top_crop + y) * (size_t)row_bytes,
+            (size_t)row_bytes
+        );
+    }
+
+    return out;
+}

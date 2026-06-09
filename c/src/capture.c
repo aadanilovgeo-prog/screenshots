@@ -4,11 +4,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int capture_when_stable(const ScRegion *region, ScImage *out) {
+#define SC_STABLE_ATTEMPTS 10
+#define SC_STABLE_INTERVAL_MS 150
+#define SC_STABLE_DIFF 0.0035
+
+int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
     ScImage *a;
     ScImage *b;
     size_t bytes;
     int attempt;
+
+    if (!region || !out) {
+        return 0;
+    }
 
     a = sc_image_create(region->width, region->height);
     b = sc_image_create(region->width, region->height);
@@ -25,16 +33,22 @@ static int capture_when_stable(const ScRegion *region, ScImage *out) {
         return 0;
     }
 
-    for (attempt = 0; attempt < 6; attempt++) {
-        sc_sleep_ms(120);
+    for (attempt = 0; attempt < SC_STABLE_ATTEMPTS; attempt++) {
+        sc_sleep_ms(SC_STABLE_INTERVAL_MS);
         if (!sc_capture_region(region, a)) {
             break;
         }
-        if (sc_image_diff_ratio(a, b) < 0.004) {
-            memcpy(out->rgb, a->rgb, bytes);
-            sc_image_free(a);
-            sc_image_free(b);
-            return 1;
+        if (sc_image_diff_ratio(a, b) < SC_STABLE_DIFF) {
+            sc_sleep_ms(80);
+            if (!sc_capture_region(region, a)) {
+                break;
+            }
+            if (sc_image_diff_ratio(a, b) < SC_STABLE_DIFF) {
+                memcpy(out->rgb, a->rgb, bytes);
+                sc_image_free(a);
+                sc_image_free(b);
+                return 1;
+            }
         }
         memcpy(b->rgb, a->rgb, bytes);
     }
@@ -52,39 +66,39 @@ int sc_capture_long_page(
     double settle_delay,
     int max_frames,
     double same_frame_threshold,
-    int expected_overlap,
+    int safe_stitch,
     const char *save_frames_dir,
     ScFrameList *frames,
-    int *overlaps,
-    int *overlap_count,
-    int *reached_end
+    int *crops,
+    int *crop_count,
+    int *reached_end,
+    ScStitchLog *log
 ) {
     ScImage *previous = NULL;
     ScImage *current = NULL;
     int index;
-    int has_preferred = expected_overlap > 0 ? 1 : 0;
-    int preferred_overlap = expected_overlap > 0 ? expected_overlap : 0;
     int overlap_capacity = max_frames;
     char frame_path[600];
+    char preview_path[600];
 
-    if (!region || !scroll || !frames || !overlaps || !overlap_count || !reached_end) {
+    if (!region || !scroll || !frames || !crops || !crop_count || !reached_end) {
         return 0;
     }
 
-    *overlap_count = 0;
+    *crop_count = 0;
     *reached_end = 0;
 
     if (scroll->focus_click) {
         printf("Focusing article region (mouse click)...\n");
         sc_focus_region(region);
-        sc_sleep_ms(200);
+        sc_sleep_ms(250);
     }
 
     previous = sc_image_create(region->width, region->height);
     if (!previous) {
         return 0;
     }
-    if (!capture_when_stable(region, previous)) {
+    if (!sc_wait_for_frame_stable(region, previous)) {
         sc_image_free(previous);
         return 0;
     }
@@ -99,12 +113,11 @@ int sc_capture_long_page(
         sc_save_png(frame_path, previous);
     }
 
-    printf("Capturing first frame...\n");
+    printf("Capturing first frame (safe stitch=%s)...\n", safe_stitch ? "on" : "off");
 
     for (index = 1; index <= max_frames; index++) {
-        ScOverlapMatch match;
-        int min_overlap;
-        int max_overlap;
+        ScShiftData shift;
+        ScSafeCrop safe_crop;
         double diff;
 
         sc_scroll_wheel_at(region, scroll);
@@ -114,49 +127,37 @@ int sc_capture_long_page(
         if (!current) {
             return 0;
         }
-        if (!capture_when_stable(region, current)) {
+        if (!sc_wait_for_frame_stable(region, current)) {
             sc_image_free(current);
             return 0;
         }
         sc_sleep_ms((int)(settle_delay * 1000.0));
 
         diff = sc_image_diff_ratio(previous, current);
-        sc_overlap_search_bounds(
-            region->height,
-            scroll->wheel_notches,
-            expected_overlap,
-            preferred_overlap,
-            has_preferred,
-            &min_overlap,
-            &max_overlap
-        );
-        match = sc_find_vertical_overlap(
-            previous,
-            current,
-            min_overlap,
-            max_overlap,
-            preferred_overlap,
-            has_preferred
-        );
-        preferred_overlap = match.overlap;
-        has_preferred = 1;
-
-        overlaps[*overlap_count] = match.overlap;
-        (*overlap_count)++;
-
-        printf(
-            "  Frame %04d: diff %.2f%%, overlap %dpx\n",
-            index,
-            diff * 100.0,
-            match.overlap
-        );
-
         if (diff <= same_frame_threshold) {
-            printf("End of page reached (frames are identical).\n");
+            printf("End of page reached (frames are nearly identical, diff=%.3f%%).\n", diff * 100.0);
             *reached_end = 1;
-            (*overlap_count)--;
             sc_image_free(current);
             break;
+        }
+
+        if (!sc_detect_vertical_content_shift(previous, current, &shift)) {
+            fprintf(stderr, "Failed to detect content shift for frame %d.\n", index);
+            sc_image_free(current);
+            return 0;
+        }
+
+        safe_crop = sc_choose_safe_crop(previous, current, &shift, safe_stitch);
+        crops[*crop_count] = safe_crop.crop;
+        (*crop_count)++;
+
+        sc_stitch_log_frame(log, index, &shift, &safe_crop, 0);
+
+        if (save_frames_dir) {
+            snprintf(frame_path, sizeof(frame_path), "%s/frame_%04d.png", save_frames_dir, index);
+            sc_save_png(frame_path, current);
+            snprintf(preview_path, sizeof(preview_path), "%s/seam_%04d_preview.png", save_frames_dir, index);
+            sc_save_seam_preview(preview_path, previous, current, safe_crop.crop);
         }
 
         if (!sc_frame_list_push(frames, current)) {
@@ -164,18 +165,12 @@ int sc_capture_long_page(
             return 0;
         }
 
-        if (save_frames_dir) {
-            snprintf(frame_path, sizeof(frame_path), "%s/frame_%04d.png", save_frames_dir, index);
-            sc_save_png(frame_path, current);
-        }
-
         previous = current;
 
-        if (*overlap_count >= overlap_capacity) {
+        if (*crop_count >= overlap_capacity) {
             break;
         }
     }
 
-    sc_stabilize_overlaps(overlaps, *overlap_count);
     return 1;
 }

@@ -3,7 +3,7 @@
 ## Download
 
 ```
-c/dist/scroll_capture_v1.0.0.exe
+c/dist/scroll_capture_v1.0.1.exe
 ```
 
 Filename format: `scroll_capture_v{VERSION}.exe`
@@ -27,6 +27,6 @@ Version is incremented **automatically only when changes merge to `main`** (GitH
 ## Run
 
 ```bat
-scroll_capture_v1.0.0.exe
-scroll_capture_v1.0.0.exe --version
+scroll_capture_v1.0.1.exe
+scroll_capture_v1.0.1.exe --version
 ```
