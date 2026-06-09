@@ -1,0 +1,27 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main, 'cursor/**']
+    paths:
+      - 'c/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build scroll_capture.exe
+        run: |
+          cd c
+          gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o dist/scroll_capture.exe ^
+            src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c ^
+            -lgdi32 -luser32
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scroll_capture-windows
+          path: c/dist/scroll_capture.exe

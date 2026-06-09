@@ -68,7 +68,6 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
     cfg->settle_delay = 0.15;
     cfg->max_frames = SC_MAX_FRAMES;
     cfg->same_frame_threshold = 0.002;
-    cfg->focus_click = 1;
 
     for (i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -97,7 +96,7 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
                 return 0;
             }
         } else if (strcmp(arg, "--no-focus-click") == 0) {
-            cfg->focus_click = 0;
+            cfg->no_focus_click = 1;
         } else if (strcmp(arg, "--focus-each-step") == 0) {
             cfg->focus_each_step = 1;
         } else if (strcmp(arg, "--scroll-delay") == 0 && i + 1 < argc) {

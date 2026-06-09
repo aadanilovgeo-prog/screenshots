@@ -7,5 +7,6 @@ frames/
 # Build artifacts
 c/stitch_test
 c/scroll_capture.exe
+!c/dist/scroll_capture.exe
 *.o
 
