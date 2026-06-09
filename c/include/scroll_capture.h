@@ -7,6 +7,11 @@
 #define SC_WHEEL_DELTA 120
 #define SC_MAX_FRAMES 600
 
+#define SC_MIN_NEW_FRAC 0.22
+#define SC_MAX_NEW_FRAC 0.32
+#define SC_MAX_MICRO_STEPS 80
+#define SC_MICRO_DELAY_SEC 0.05
+
 typedef struct {
     int left;
     int top;
@@ -27,9 +32,10 @@ typedef struct {
 } ScFrameList;
 
 typedef struct {
-    int wheel_notches;
-    int micro_steps;
     double micro_delay;
+    double min_new_frac;
+    double max_new_frac;
+    int max_micro_steps;
     int focus_click;
     int focus_each_step;
 } ScScrollSettings;
@@ -40,12 +46,9 @@ typedef struct {
     char output_path[512];
     int has_output;
     int countdown;
-    int wheel_notches;
-    int micro_steps;
     double micro_delay;
     int no_focus_click;
     int focus_each_step;
-    double scroll_delay;
     double settle_delay;
     int max_frames;
     double same_frame_threshold;
@@ -60,6 +63,9 @@ typedef struct {
     int initial_crop;
     double confidence;
     double match_score;
+    int scroll_overshoot;
+    int micro_steps_used;
+    double new_content_frac;
 } ScShiftData;
 
 typedef struct {
@@ -132,7 +138,7 @@ int sc_pick_region_interactive(ScRegion *region);
 void sc_countdown(int seconds, const char *message);
 
 int sc_focus_region(const ScRegion *region);
-void sc_scroll_wheel_at(const ScRegion *region, const ScScrollSettings *scroll);
+void sc_scroll_one_notch(const ScRegion *region, const ScScrollSettings *scroll);
 
 int sc_capture_region(const ScRegion *region, ScImage *out);
 int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out);
@@ -145,7 +151,6 @@ int sc_make_default_output_path(char *buf, size_t buflen);
 int sc_capture_long_page(
     const ScRegion *region,
     const ScScrollSettings *scroll,
-    double scroll_delay,
     double settle_delay,
     int max_frames,
     double same_frame_threshold,

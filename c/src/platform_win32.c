@@ -63,26 +63,15 @@ static void wheel_at(int x, int y, int notches_down) {
     mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0);
 }
 
-void sc_scroll_wheel_at(const ScRegion *region, const ScScrollSettings *scroll) {
+void sc_scroll_one_notch(const ScRegion *region, const ScScrollSettings *scroll) {
     int x = region->left + region->width / 2;
     int y = region->top + region->height / 2;
-    int steps = scroll->micro_steps > 0 ? scroll->micro_steps : 1;
-    int base = scroll->wheel_notches / steps;
-    int remainder = scroll->wheel_notches % steps;
-    int i;
 
     if (scroll->focus_each_step) {
         sc_focus_region(region);
     }
 
-    for (i = 0; i < steps; i++) {
-        int notches = base + (i < remainder ? 1 : 0);
-        if (notches <= 0) {
-            continue;
-        }
-        wheel_at(x, y, notches);
-        sc_sleep_ms((int)(scroll->micro_delay * 1000.0));
-    }
+    wheel_at(x, y, 1);
 }
 
 int sc_capture_region(const ScRegion *region, ScImage *out) {
@@ -247,7 +236,7 @@ int sc_focus_region(const ScRegion *region) {
     return 0;
 }
 
-void sc_scroll_wheel_at(const ScRegion *region, const ScScrollSettings *scroll) {
+void sc_scroll_one_notch(const ScRegion *region, const ScScrollSettings *scroll) {
     (void)region;
     (void)scroll;
 }

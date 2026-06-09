@@ -7,6 +7,7 @@
 #define SC_STABLE_ATTEMPTS 10
 #define SC_STABLE_INTERVAL_MS 150
 #define SC_STABLE_DIFF 0.0035
+#define SC_MIN_ACCEPT_NEW_FRAC 0.08
 
 int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
     ScImage *a;
@@ -59,10 +60,104 @@ int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
     return 1;
 }
 
+static int adaptive_scroll_to_target(
+    const ScRegion *region,
+    const ScScrollSettings *scroll,
+    const ScImage *previous,
+    ScImage *current,
+    ScShiftData *shift,
+    double same_frame_threshold
+) {
+    int height = region->height;
+    int min_shift;
+    int max_shift;
+    int micro;
+    double diff;
+
+    if (!region || !scroll || !previous || !current || !shift) {
+        return 0;
+    }
+
+    min_shift = (int)(height * scroll->min_new_frac);
+    max_shift = (int)(height * scroll->max_new_frac);
+    if (min_shift < 24) {
+        min_shift = 24;
+    }
+    if (max_shift <= min_shift) {
+        max_shift = min_shift + height / 10;
+    }
+
+    memset(shift, 0, sizeof(*shift));
+
+    for (micro = 0; micro < scroll->max_micro_steps; micro++) {
+        sc_scroll_one_notch(region, scroll);
+        sc_sleep_ms((int)(scroll->micro_delay * 1000.0));
+
+        if (!sc_wait_for_frame_stable(region, current)) {
+            return 0;
+        }
+
+        diff = sc_image_diff_ratio(previous, current);
+        if (diff <= same_frame_threshold) {
+            return 2;
+        }
+
+        if (!sc_detect_vertical_content_shift(previous, current, shift)) {
+            return 0;
+        }
+
+        shift->micro_steps_used = micro + 1;
+        shift->new_content_frac = (double)shift->detected_shift / (double)height;
+
+        printf(
+            "  Adaptive scroll micro=%d shift=%dpx (%.1f%% new content, target %.0f-%.0f%%)\n",
+            micro + 1,
+            shift->detected_shift,
+            shift->new_content_frac * 100.0,
+            scroll->min_new_frac * 100.0,
+            scroll->max_new_frac * 100.0
+        );
+
+        if (shift->detected_shift >= min_shift && shift->detected_shift <= max_shift) {
+            return 1;
+        }
+
+        if (shift->detected_shift > max_shift) {
+            shift->scroll_overshoot = 1;
+            shift->confidence *= 0.65;
+            printf(
+                "  [warn] Scroll overshoot (%.1f%% > %.0f%%), accepting frame with lower confidence\n",
+                shift->new_content_frac * 100.0,
+                scroll->max_new_frac * 100.0
+            );
+            return 1;
+        }
+    }
+
+    if (shift->detected_shift >= (int)(height * SC_MIN_ACCEPT_NEW_FRAC)) {
+        shift->confidence *= 0.75;
+        printf(
+            "  [warn] Max micro-steps reached at %.1f%% new content (target %.0f-%.0f%%)\n",
+            shift->new_content_frac * 100.0,
+            scroll->min_new_frac * 100.0,
+            scroll->max_new_frac * 100.0
+        );
+        return 1;
+    }
+
+    fprintf(
+        stderr,
+        "Scroll did not move enough after %d micro-steps (shift=%dpx, need >=%dpx).\n",
+        scroll->max_micro_steps,
+        shift->detected_shift,
+        min_shift
+    );
+    return 0;
+}
+
 int sc_capture_long_page(
     const ScRegion *region,
     const ScScrollSettings *scroll,
-    double scroll_delay,
     double settle_delay,
     int max_frames,
     double same_frame_threshold,
@@ -113,38 +208,65 @@ int sc_capture_long_page(
         sc_save_png(frame_path, previous);
     }
 
-    printf("Capturing first frame (safe stitch=%s)...\n", safe_stitch ? "on" : "off");
+    printf(
+        "Capturing first frame (adaptive scroll %.0f-%.0f%% new content, safe stitch=%s)...\n",
+        scroll->min_new_frac * 100.0,
+        scroll->max_new_frac * 100.0,
+        safe_stitch ? "on" : "off"
+    );
 
     for (index = 1; index <= max_frames; index++) {
         ScShiftData shift;
         ScSafeCrop safe_crop;
-        double diff;
-
-        sc_scroll_wheel_at(region, scroll);
-        sc_sleep_ms((int)(scroll_delay * 1000.0));
+        int scroll_result;
 
         current = sc_image_create(region->width, region->height);
         if (!current) {
             return 0;
         }
-        if (!sc_wait_for_frame_stable(region, current)) {
-            sc_image_free(current);
-            return 0;
-        }
-        sc_sleep_ms((int)(settle_delay * 1000.0));
 
-        diff = sc_image_diff_ratio(previous, current);
-        if (diff <= same_frame_threshold) {
-            printf("End of page reached (frames are nearly identical, diff=%.3f%%).\n", diff * 100.0);
+        scroll_result = adaptive_scroll_to_target(
+            region,
+            scroll,
+            previous,
+            current,
+            &shift,
+            same_frame_threshold
+        );
+
+        if (scroll_result == 2) {
+            printf("End of page reached (no content change after scroll).\n");
             *reached_end = 1;
             sc_image_free(current);
             break;
         }
-
-        if (!sc_detect_vertical_content_shift(previous, current, &shift)) {
-            fprintf(stderr, "Failed to detect content shift for frame %d.\n", index);
+        if (scroll_result == 0) {
             sc_image_free(current);
             return 0;
+        }
+
+        {
+            int saved_micro = shift.micro_steps_used;
+            int saved_overshoot = shift.scroll_overshoot;
+
+            sc_sleep_ms((int)(settle_delay * 1000.0));
+            if (!sc_wait_for_frame_stable(region, current)) {
+                sc_image_free(current);
+                return 0;
+            }
+
+            if (!sc_detect_vertical_content_shift(previous, current, &shift)) {
+                fprintf(stderr, "Failed to detect content shift for frame %d.\n", index);
+                sc_image_free(current);
+                return 0;
+            }
+
+            shift.micro_steps_used = saved_micro;
+            shift.new_content_frac = (double)shift.detected_shift / (double)region->height;
+            if (saved_overshoot) {
+                shift.scroll_overshoot = 1;
+                shift.confidence *= 0.65;
+            }
         }
 
         safe_crop = sc_choose_safe_crop(previous, current, &shift, safe_stitch);

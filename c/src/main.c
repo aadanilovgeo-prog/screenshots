@@ -33,9 +33,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    scroll.wheel_notches = cfg.wheel_notches;
-    scroll.micro_steps = cfg.micro_steps > 0 ? cfg.micro_steps : 1;
     scroll.micro_delay = cfg.micro_delay;
+    scroll.min_new_frac = SC_MIN_NEW_FRAC;
+    scroll.max_new_frac = SC_MAX_NEW_FRAC;
+    scroll.max_micro_steps = SC_MAX_MICRO_STEPS;
     scroll.focus_click = cfg.no_focus_click ? 0 : 1;
     scroll.focus_each_step = cfg.focus_each_step;
 
@@ -50,12 +51,13 @@ int main(int argc, char **argv) {
 
     printf(
         "Region: %d,%d %dx%d\n"
-        "Scroll: wheel_notches=%d (physical scroll only), safe_stitch=%s\n",
+        "Adaptive scroll: %.0f-%.0f%% new content per frame, safe_stitch=%s\n",
         region.left,
         region.top,
         region.width,
         region.height,
-        scroll.wheel_notches,
+        scroll.min_new_frac * 100.0,
+        scroll.max_new_frac * 100.0,
         cfg.safe_stitch ? "on" : "off"
     );
 
@@ -73,7 +75,6 @@ int main(int argc, char **argv) {
     if (!sc_capture_long_page(
             &region,
             &scroll,
-            cfg.scroll_delay,
             cfg.settle_delay,
             cfg.max_frames,
             cfg.same_frame_threshold,
@@ -104,7 +105,7 @@ int main(int argc, char **argv) {
         fprintf(
             stderr,
             "Only one frame captured - scrolling did not work.\n"
-            "Try: --wheel-notches 12 --focus-each-step --scroll-delay 1.0\n"
+            "Try: --focus-each-step --settle-delay 0.25\n"
         );
         free(crops);
         sc_frame_list_clear(&frames);
@@ -112,7 +113,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    printf("Stitching %d frames (safe mode, per-seam crop, no global median)...\n", frames.count);
+    printf("Stitching %d frames (safe mode, per-seam crop)...\n", frames.count);
     result = sc_stitch_frames_safe(&frames, crops, crop_count);
     if (!result) {
         fprintf(stderr, "Stitching failed.\n");

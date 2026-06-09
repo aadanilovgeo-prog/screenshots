@@ -32,24 +32,26 @@ static int parse_double(const char *value, double *out) {
 void sc_config_print_help(const char *prog) {
     printf(
         "Usage: %s [options]\n\n"
+        "Scroll is adaptive: 1 wheel notch at a time until %.0f-%.0f%% of the\n"
+        "capture height is new content (safe for 13\"-34\" screens and RDP).\n\n"
         "Options:\n"
         "  --region L,T,W,H         Capture region\n"
         "  -o, --output FILE        Output PNG path\n"
         "  --countdown N            Seconds before start (default 5)\n"
-        "  --wheel-notches N        Wheel notches per scroll step (default 10)\n"
-        "  --micro-steps N          Micro-scroll steps per step (default 8)\n"
-        "  --micro-delay SEC        Delay between micro-scrolls (0.04)\n"
+        "  --micro-delay SEC        Delay between wheel notches (default %.2f)\n"
         "  --no-focus-click         Skip initial focus click\n"
-        "  --focus-each-step        Click before each scroll step\n"
-        "  --scroll-delay SEC       Delay after scroll (0.8)\n"
-        "  --settle-delay SEC       Delay after screenshot (0.15)\n"
+        "  --focus-each-step        Click before each wheel notch\n"
+        "  --settle-delay SEC       Delay after frame stabilizes (0.15)\n"
         "  --max-frames N           Frame limit (600)\n"
         "  --same-frame-threshold X End-of-page threshold (0.002)\n"
         "  --no-safe-stitch         Disable safe stitch (not recommended)\n"
         "  --save-frames DIR        Save frames, seam previews, stitch_log.txt\n"
         "  --version                Show version\n"
         "  -h, --help               Show help\n",
-        prog
+        prog,
+        SC_MIN_NEW_FRAC * 100.0,
+        SC_MAX_NEW_FRAC * 100.0,
+        SC_MICRO_DELAY_SEC
     );
 }
 
@@ -62,10 +64,7 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
 
     memset(cfg, 0, sizeof(*cfg));
     cfg->countdown = 5;
-    cfg->wheel_notches = 10;
-    cfg->micro_steps = 8;
-    cfg->micro_delay = 0.04;
-    cfg->scroll_delay = 0.8;
+    cfg->micro_delay = SC_MICRO_DELAY_SEC;
     cfg->settle_delay = 0.15;
     cfg->max_frames = SC_MAX_FRAMES;
     cfg->same_frame_threshold = 0.002;
@@ -89,12 +88,6 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
             cfg->has_output = 1;
         } else if (strcmp(arg, "--countdown") == 0 && i + 1 < argc) {
             cfg->countdown = atoi(argv[++i]);
-        } else if (strcmp(arg, "--wheel-notches") == 0 || strcmp(arg, "--scroll-clicks") == 0) {
-            if (i + 1 < argc) {
-                cfg->wheel_notches = atoi(argv[++i]);
-            }
-        } else if (strcmp(arg, "--micro-steps") == 0 && i + 1 < argc) {
-            cfg->micro_steps = atoi(argv[++i]);
         } else if (strcmp(arg, "--micro-delay") == 0 && i + 1 < argc) {
             if (!parse_double(argv[++i], &cfg->micro_delay)) {
                 return 0;
@@ -103,10 +96,6 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
             cfg->no_focus_click = 1;
         } else if (strcmp(arg, "--focus-each-step") == 0) {
             cfg->focus_each_step = 1;
-        } else if (strcmp(arg, "--scroll-delay") == 0 && i + 1 < argc) {
-            if (!parse_double(argv[++i], &cfg->scroll_delay)) {
-                return 0;
-            }
         } else if (strcmp(arg, "--settle-delay") == 0 && i + 1 < argc) {
             if (!parse_double(argv[++i], &cfg->settle_delay)) {
                 return 0;
@@ -122,6 +111,14 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
         } else if (strcmp(arg, "--save-frames") == 0 && i + 1 < argc) {
             strncpy(cfg->save_frames_dir, argv[++i], sizeof(cfg->save_frames_dir) - 1);
             cfg->has_save_frames = 1;
+        } else if (
+            strcmp(arg, "--wheel-notches") == 0 ||
+            strcmp(arg, "--scroll-clicks") == 0 ||
+            strcmp(arg, "--micro-steps") == 0 ||
+            strcmp(arg, "--scroll-delay") == 0
+        ) {
+            fprintf(stderr, "Option %s was removed. Scroll is now adaptive (see --help).\n", arg);
+            return 0;
         } else {
             fprintf(stderr, "Unknown argument: %s\n", arg);
             return 0;

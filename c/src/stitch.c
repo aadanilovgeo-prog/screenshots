@@ -23,8 +23,9 @@ typedef struct {
     int height;
 } FrameFeatures;
 
-static const int CROP_OFFSETS[] = { -80, -50, -30, -20, -10, 0, 10, 20 };
-static const int CROP_OFFSET_COUNT = (int)(sizeof(CROP_OFFSETS) / sizeof(CROP_OFFSETS[0]));
+static const int CROP_OFFSETS_SAFE[] = { -80, -50, -30, -20, -10, 0 };
+static const int CROP_OFFSETS_ALL[] = { -80, -50, -30, -20, -10, 0, 10, 20 };
+
 
 static float ncc_rows(const float *a, const float *b, int len) {
     float mean_a = 0.0f;
@@ -523,8 +524,14 @@ ScSafeCrop sc_choose_safe_crop(
     result.confidence = shift->confidence;
     result.safe_mode = safe_mode;
 
-    for (i = 0; i < CROP_OFFSET_COUNT; i++) {
-        int candidate = initial + CROP_OFFSETS[i];
+    {
+        const int *offsets = safe_mode ? CROP_OFFSETS_SAFE : CROP_OFFSETS_ALL;
+        int offset_count = safe_mode
+            ? (int)(sizeof(CROP_OFFSETS_SAFE) / sizeof(CROP_OFFSETS_SAFE[0]))
+            : (int)(sizeof(CROP_OFFSETS_ALL) / sizeof(CROP_OFFSETS_ALL[0]));
+
+    for (i = 0; i < offset_count; i++) {
+        int candidate = initial + offsets[i];
         double seam;
         double content_loss;
         double duplicate;
@@ -606,6 +613,7 @@ ScSafeCrop sc_choose_safe_crop(
         result.duplicate_risk = fmax(result.duplicate_risk, 0.20);
     }
 
+    }
     (void)best_idx;
     features_free(&fa);
     features_free(&fb);
@@ -694,11 +702,13 @@ void sc_stitch_log_frame(
     }
 
     printf(
-        "  Frame %04d: shift=%dpx overlap=%dpx initial_crop=%d final_crop=%d "
+        "  Frame %04d: micro=%d shift=%dpx (%.1f%% new) overlap=%dpx initial_crop=%d final_crop=%d "
         "confidence=%.2f safe_mode=%d dup_risk=%.3f loss_risk=%.3f "
         "table_risk=%.3f image_risk=%.3f%s\n",
         frame_index,
+        shift->micro_steps_used,
         shift->detected_shift,
+        shift->new_content_frac * 100.0,
         shift->detected_overlap,
         crop->initial_crop,
         crop->crop,
@@ -718,7 +728,9 @@ void sc_stitch_log_frame(
     fprintf(
         log->log_file,
         "Frame=%d\n"
+        "MicroSteps=%d\n"
         "DetectedShift=%d\n"
+        "NewContentFrac=%.4f\n"
         "DetectedOverlap=%d\n"
         "InitialCrop=%d\n"
         "FinalSafeCrop=%d\n"
@@ -731,7 +743,9 @@ void sc_stitch_log_frame(
         "WeakSeam=%d\n"
         "EndOfPage=%d\n\n",
         frame_index,
+        shift->micro_steps_used,
         shift->detected_shift,
+        shift->new_content_frac * 100.0,
         shift->detected_overlap,
         crop->initial_crop,
         crop->crop,
