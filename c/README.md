@@ -1,40 +1,32 @@
 # scroll_capture (C)
 
-Нативная Windows-версия утилиты захвата длинных статей. Функциональность совпадает с `scroll_capture.py`:
-
-- выбор области (интерактивно или `--region`)
-- один клик при старте для фокуса
-- прокрутка колёсиком (`WM_MOUSEWHEEL`)
-- серия скриншотов и склейка с выравниванием по тексту/таблицам
-- сохранение PNG
-
-## Готовый EXE
-
-Скачайте из репозитория:
+## Download
 
 ```
 c/dist/scroll_capture_v1.0.0.exe
 ```
 
-Имя exe включает версию: `scroll_capture_v{VERSION}.exe`
+Filename format: `scroll_capture_v{VERSION}.exe`
 
-## Сборка (Windows)
+## Local build (no version bump)
 
 ```bat
 cd c
 build.bat
 ```
 
-Создаст `dist\scroll_capture_v1.0.1.exe` (версия автоматически увеличивается).
+Builds exe for the **current** version from `/VERSION` without incrementing it.
 
-## Запуск
+## Version bump
+
+Version is incremented **automatically only when changes merge to `main`** (GitHub Actions):
+1. Bump patch in `VERSION`
+2. Build `scroll_capture_vX.Y.Z.exe`
+3. Commit and push to `main`
+
+## Run
 
 ```bat
 scroll_capture_v1.0.0.exe
 scroll_capture_v1.0.0.exe --version
-scroll_capture_v1.0.0.exe --region 120,80,900,700 -o article.png
 ```
-
-## Version
-
-Версия хранится в `/VERSION`. Каждая сборка (`build.bat`, `make windows`, CI) увеличивает patch-номер и обновляет имя exe.

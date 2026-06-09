@@ -6,14 +6,11 @@ SC_VER := $(shell tr -d '\r\n' < ../VERSION)
 SRC = src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c
 EXE = dist/scroll_capture_v$(SC_VER).exe
 
-.PHONY: all windows clean test_stitch bump
+.PHONY: all windows clean test_stitch
 
 all: windows
 
-bump:
-	python3 scripts/bump_version.py
-
-windows: bump
+windows:
 	mkdir -p dist
 	$(CC) $(CFLAGS) -o $(EXE) $(SRC) $(LDFLAGS_WIN)
 	@echo Built $(EXE)

@@ -1,33 +1,49 @@
-name: Build Windows EXE
+name: Release scroll_capture (merge to main)
 
 on:
   push:
-    branches: [main, 'cursor/**']
+    branches: [main]
     paths:
       - 'c/**'
-      - 'VERSION'
       - 'scroll_capture.py'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Bump version
         run: python c/scripts/bump_version.py
 
-      - name: Build scroll_capture.exe
-        shell: cmd
+      - name: Build exe
+        shell: bash
         run: |
-          if not exist c\dist mkdir c\dist
-          for /f "usebackq delims=" %%v in ("VERSION") do set SC_VER=%%v
+          VER=$(tr -d '\r\n' < VERSION)
+          mkdir -p c/dist
+          rm -f c/dist/scroll_capture_v*.exe
           cd c
-          gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o dist/scroll_capture_v%SC_VER%.exe ^
-            src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c ^
+          gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o "dist/scroll_capture_v${VER}.exe" \
+            src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c \
             -lgdi32 -luser32
-          echo Built dist/scroll_capture_v%SC_VER%.exe
+          echo "Built dist/scroll_capture_v${VER}.exe"
+
+      - name: Commit and push release
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          VER=$(tr -d '\r\n' < VERSION)
+          git add VERSION c/include/version.h scroll_capture.py c/dist/
+          git diff --staged --quiet && echo "Nothing to commit" && exit 0
+          git commit -m "release: scroll_capture v${VER} [skip ci]"
+          git push
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
