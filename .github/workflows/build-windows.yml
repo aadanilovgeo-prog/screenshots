@@ -5,7 +5,6 @@ on:
     branches: [main, 'cursor/**']
     paths:
       - 'c/**'
-      - 'updated_screenshoter/**'
   workflow_dispatch:
 
 jobs:
@@ -22,23 +21,8 @@ jobs:
             src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c ^
             -lgdi32 -luser32
 
-      - name: Build updated_screenshoter.exe
-        run: |
-          if not exist updated_screenshoter\dist mkdir updated_screenshoter\dist
-          cd updated_screenshoter
-          gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o dist/updated_screenshoter.exe ^
-            src/main.c src/config.c src/image.c src/metrics.c src/stitch.c src/session.c ^
-            src/platform_win32.c src/png_io.c ^
-            -lgdi32 -luser32 -lole32 -lm
-
-      - name: Upload scroll_capture artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: scroll_capture-windows
           path: c/dist/scroll_capture.exe
-
-      - name: Upload updated_screenshoter artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: updated_screenshoter-windows
-          path: updated_screenshoter/dist/updated_screenshoter.exe
