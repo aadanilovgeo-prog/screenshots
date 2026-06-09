@@ -3,7 +3,7 @@
 Две реализации одной утилиты:
 
 - `scroll_capture.py` — Python (кроссплатформенно)
-- `c/scroll_capture.exe` — нативный C для Windows (быстрее, без зависимостей)
+- `c/scroll_capture_v1.0.0.exe` — нативный C для Windows (быстрее, без зависимостей)
 
 # Scroll Capture — автоматический скриншот длинной статьи
 

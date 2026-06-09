@@ -19,15 +19,18 @@ jobs:
         run: python c/scripts/bump_version.py
 
       - name: Build scroll_capture.exe
+        shell: cmd
         run: |
           if not exist c\dist mkdir c\dist
+          for /f "usebackq delims=" %%v in ("VERSION") do set SC_VER=%%v
           cd c
-          gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o dist/scroll_capture.exe ^
+          gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o dist/scroll_capture_v%SC_VER%.exe ^
             src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c ^
             -lgdi32 -luser32
+          echo Built dist/scroll_capture_v%SC_VER%.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: scroll_capture-windows
-          path: c/dist/scroll_capture.exe
+          path: c/dist/scroll_capture_v*.exe

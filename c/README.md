@@ -10,67 +10,31 @@
 
 ## Готовый EXE
 
-Скомпилированный файл лежит в репозитории:
+Скачайте из репозитория:
 
 ```
-c/dist/scroll_capture.exe
+c/dist/scroll_capture_v1.0.0.exe
 ```
 
-Скачайте его с GitHub и запускайте. Пересборка нужна только при изменении исходников.
+Имя exe включает версию: `scroll_capture_v{VERSION}.exe`
 
 ## Сборка (Windows)
-
-Нужен [MinGW-w64](https://www.mingw-w64.org/) или MSYS2 с `gcc` в PATH.
-
-```bat
-cd c
-dist\scroll_capture.exe
-```
-
-Пересборка:
 
 ```bat
 cd c
 build.bat
 ```
 
-Или вручную:
-
-```bat
-gcc -O2 -std=c11 -Wall -Wextra -Iinclude -o scroll_capture.exe ^
-  src/main.c src/config.c src/image.c src/stitch.c src/capture.c src/png_io.c src/platform_win32.c ^
-  -lgdi32 -luser32
-```
+Создаст `dist\scroll_capture_v1.0.1.exe` (версия автоматически увеличивается).
 
 ## Запуск
 
 ```bat
-scroll_capture.exe
+scroll_capture_v1.0.0.exe
+scroll_capture_v1.0.0.exe --version
+scroll_capture_v1.0.0.exe --region 120,80,900,700 -o article.png
 ```
-
-С параметрами (те же, что у Python-версии):
-
-```bat
-scroll_capture.exe --region 120,80,900,700 -o article.png
-scroll_capture.exe --wheel-notches 10 --save-frames frames
-```
-
-## Преимущества C-версии
-
-- один `.exe` без Python и pip
-- быстрее захват экрана и склейка
-- меньше потребление памяти на длинных статьях
-
-## Зависимости
-
-Только Win32 API и встроенный `stb_image_write` (лежит в `third_party/`).
-
 
 ## Version
 
-Current version is stored in `/VERSION` at repo root.
-Each build (`build.bat` or `make windows`) auto-increments the patch number.
-
-```bat
-scroll_capture.exe --version
-```
+Версия хранится в `/VERSION`. Каждая сборка (`build.bat`, `make windows`, CI) увеличивает patch-номер и обновляет имя exe.

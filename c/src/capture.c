@@ -144,7 +144,6 @@ int sc_capture_long_page(
         overlaps[*overlap_count] = match.overlap;
         (*overlap_count)++;
 
-        seam = 0.0;
         printf(
             "  Frame %04d: diff %.2f%%, overlap %dpx\n",
             index,
