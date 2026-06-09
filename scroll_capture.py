@@ -219,7 +219,7 @@ def emit_wheel_at(x: int, y: int, notches_down: int, method: str) -> None:
 def scroll_wheel_at(region: Region, settings: ScrollSettings) -> None:
     x, y = region.center
 
-    if settings.focus_click or settings.focus_before_each_step:
+    if settings.focus_before_each_step:
         focus_region(region)
 
     steps = max(1, settings.micro_steps)
@@ -336,9 +336,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Не кликать в область статьи перед прокруткой (обычно клик нужен)",
     )
     parser.add_argument(
-        "--no-focus-each-step",
+        "--focus-each-step",
         action="store_true",
-        help="Не кликать в область перед каждым шагом (по умолчанию клик включён)",
+        help="Кликать в область перед каждым шагом (по умолчанию клик только при старте)",
     )
     parser.add_argument(
         "--scroll-delay",
@@ -396,7 +396,7 @@ def main() -> int:
         micro_steps=args.micro_steps,
         micro_delay=args.micro_delay,
         focus_click=not args.no_focus_click,
-        focus_before_each_step=not args.no_focus_each_step,
+        focus_before_each_step=args.focus_each_step,
     )
 
     print(
@@ -431,7 +431,7 @@ def main() -> int:
         print(
             "Получен только один кадр — прокрутка не сработала. Попробуйте:\n"
             "  --scroll-method win32 --wheel-notches 20 --focus-each-step\n"
-            "  или увеличьте --scroll-delay до 0.8",
+            "  или увеличьте --scroll-delay",
             file=sys.stderr,
         )
         return 1
