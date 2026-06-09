@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import platform
 import sys
 import time
 from dataclasses import dataclass
@@ -22,7 +24,10 @@ from PIL import Image
 
 
 pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.05
+pyautogui.PAUSE = 0.02
+
+WHEEL_DELTA = 120
+MOUSEEVENTF_WHEEL = 0x0800
 
 
 @dataclass
@@ -53,6 +58,16 @@ class Region:
         }
 
 
+@dataclass
+class ScrollSettings:
+    method: str
+    wheel_notches: int
+    micro_steps: int
+    micro_delay: float
+    focus_click: bool
+    focus_before_each_step: bool
+
+
 def parse_region(value: str) -> Region:
     parts = [int(part.strip()) for part in value.split(",")]
     if len(parts) != 4:
@@ -61,6 +76,12 @@ def parse_region(value: str) -> Region:
     if width <= 0 or height <= 0:
         raise argparse.ArgumentTypeError("Ширина и высота должны быть больше нуля")
     return Region(left, top, width, height)
+
+
+def default_scroll_method() -> str:
+    if platform.system() == "Windows":
+        return "win32"
+    return "pynput"
 
 
 def pick_region_interactive() -> Region:
@@ -104,7 +125,6 @@ def image_diff_ratio(a: Image.Image, b: Image.Image) -> float:
 
 
 def find_vertical_overlap(img_above: Image.Image, img_below: Image.Image, max_search: int) -> int:
-    """Подбирает высоту перекрытия между нижней частью верхнего и верхней частью нижнего кадра."""
     width = img_above.width
     height = min(img_above.height, img_below.height)
     max_search = min(max_search, height - 20)
@@ -152,15 +172,72 @@ def stitch_frames(frames: list[Image.Image], expected_overlap: int) -> Image.Ima
     return result
 
 
-def scroll_at(region: Region, scroll_clicks: int) -> None:
-    pyautogui.moveTo(*region.center, duration=0.15)
-    pyautogui.scroll(-scroll_clicks)
+def focus_region(region: Region) -> None:
+    x, y = region.center
+    pyautogui.moveTo(x, y, duration=0.08)
+    time.sleep(0.05)
+    pyautogui.click(x, y)
+    time.sleep(0.08)
+
+
+def _win32_wheel_at(x: int, y: int, notches_down: int) -> None:
+    user32 = ctypes.windll.user32
+    user32.SetCursorPos(x, y)
+    # Отрицательное значение = прокрутка вниз (WM_MOUSEWHEEL).
+    delta = int(-WHEEL_DELTA * notches_down)
+    user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta & 0xFFFFFFFF, 0)
+
+
+def _pynput_wheel_at(x: int, y: int, notches_down: int) -> None:
+    from pynput.mouse import Controller
+
+    mouse = Controller()
+    mouse.position = (x, y)
+    time.sleep(0.02)
+    mouse.scroll(0, -notches_down)
+
+
+def _pyautogui_wheel_at(x: int, y: int, notches_down: int) -> None:
+    pyautogui.moveTo(x, y, duration=0.02)
+    time.sleep(0.02)
+    pyautogui.scroll(-notches_down)
+
+
+def emit_wheel_at(x: int, y: int, notches_down: int, method: str) -> None:
+    if notches_down <= 0:
+        return
+    if method == "win32":
+        _win32_wheel_at(x, y, notches_down)
+    elif method == "pynput":
+        _pynput_wheel_at(x, y, notches_down)
+    elif method == "pyautogui":
+        _pyautogui_wheel_at(x, y, notches_down)
+    else:
+        raise ValueError(f"Неизвестный метод прокрутки: {method}")
+
+
+def scroll_wheel_at(region: Region, settings: ScrollSettings) -> None:
+    x, y = region.center
+
+    if settings.focus_click or settings.focus_before_each_step:
+        focus_region(region)
+
+    steps = max(1, settings.micro_steps)
+    base = settings.wheel_notches // steps
+    remainder = settings.wheel_notches % steps
+
+    for step_index in range(steps):
+        notches = base + (1 if step_index < remainder else 0)
+        if notches <= 0:
+            continue
+        emit_wheel_at(x, y, notches, settings.method)
+        time.sleep(settings.micro_delay)
 
 
 def capture_long_page(
     region: Region,
+    scroll: ScrollSettings,
     *,
-    scroll_clicks: int,
     scroll_delay: float,
     settle_delay: float,
     max_frames: int,
@@ -170,6 +247,11 @@ def capture_long_page(
     frames: list[Image.Image] = []
     reached_end = False
 
+    if scroll.focus_click:
+        print("Фокус на области статьи (клик мышью)...")
+        focus_region(region)
+        time.sleep(0.2)
+
     with mss.mss() as sct:
         print("Захват первого кадра...")
         previous = grab_region(sct, region)
@@ -178,7 +260,7 @@ def capture_long_page(
             previous.save(save_frames_dir / "frame_0000.png")
 
         for index in range(1, max_frames + 1):
-            scroll_at(region, scroll_clicks)
+            scroll_wheel_at(region, scroll)
             time.sleep(scroll_delay)
 
             current = grab_region(sct, region)
@@ -223,15 +305,45 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Секунд до старта — успейте переключиться в окно VRM",
     )
     parser.add_argument(
+        "--scroll-method",
+        choices=("auto", "win32", "pynput", "pyautogui"),
+        default="auto",
+        help="Способ имитации колёсика мыши (win32 — нативный Windows API)",
+    )
+    parser.add_argument(
         "--scroll-clicks",
+        "--wheel-notches",
+        dest="wheel_notches",
+        type=int,
+        default=20,
+        help="Сколько «щелчков» колёсика за один шаг прокрутки",
+    )
+    parser.add_argument(
+        "--micro-steps",
         type=int,
         default=8,
-        help="Интенсивность прокрутки колёсиком за один шаг (больше = дальше листает)",
+        help="Разбить один шаг на несколько коротких прокруток колёсиком",
+    )
+    parser.add_argument(
+        "--micro-delay",
+        type=float,
+        default=0.04,
+        help="Пауза между микро-прокрутками, сек",
+    )
+    parser.add_argument(
+        "--no-focus-click",
+        action="store_true",
+        help="Не кликать в область статьи перед прокруткой (обычно клик нужен)",
+    )
+    parser.add_argument(
+        "--no-focus-each-step",
+        action="store_true",
+        help="Не кликать в область перед каждым шагом (по умолчанию клик включён)",
     )
     parser.add_argument(
         "--scroll-delay",
         type=float,
-        default=0.35,
+        default=0.8,
         help="Пауза после прокрутки перед скриншотом, сек",
     )
     parser.add_argument(
@@ -266,14 +378,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_scroll_method(requested: str) -> str:
+    if requested != "auto":
+        return requested
+    return default_scroll_method()
+
+
 def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
 
     region = args.region or pick_region_interactive()
+    scroll_method = resolve_scroll_method(args.scroll_method)
+    scroll = ScrollSettings(
+        method=scroll_method,
+        wheel_notches=args.wheel_notches,
+        micro_steps=args.micro_steps,
+        micro_delay=args.micro_delay,
+        focus_click=not args.no_focus_click,
+        focus_before_each_step=not args.no_focus_each_step,
+    )
+
     print(
         f"Область захвата: left={region.left}, top={region.top}, "
         f"width={region.width}, height={region.height}"
+    )
+    print(
+        f"Прокрутка: метод={scroll.method}, щелчков за шаг={scroll.wheel_notches}, "
+        f"микро-шагов={scroll.micro_steps}"
     )
     print("Экстренная остановка: резко переместите мышь в левый верхний угол экрана (pyautogui FAILSAFE).")
 
@@ -287,7 +419,7 @@ def main() -> int:
 
     frames, reached_end = capture_long_page(
         region,
-        scroll_clicks=args.scroll_clicks,
+        scroll,
         scroll_delay=args.scroll_delay,
         settle_delay=args.settle_delay,
         max_frames=args.max_frames,
@@ -296,13 +428,18 @@ def main() -> int:
     )
 
     if len(frames) < 2 and not reached_end:
-        print("Получен только один кадр. Попробуйте увеличить --scroll-clicks.", file=sys.stderr)
+        print(
+            "Получен только один кадр — прокрутка не сработала. Попробуйте:\n"
+            "  --scroll-method win32 --wheel-notches 20 --focus-each-step\n"
+            "  или увеличьте --scroll-delay до 0.8",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Склеивание {len(frames)} кадров...")
     expected_overlap = args.expected_overlap
     if expected_overlap <= 0:
-        expected_overlap = max(region.height - args.scroll_clicks * 40, region.height // 4)
+        expected_overlap = max(region.height - args.wheel_notches * 30, region.height // 4)
     result = stitch_frames(frames, expected_overlap)
 
     output = args.output
