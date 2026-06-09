@@ -3,24 +3,18 @@
 ## Download
 
 ```
-c/dist/scroll_capture_v1.0.4.exe
+c/dist/scroll_capture_v1.0.6.exe
 ```
 
 ## Adaptive scroll
 
-One wheel notch at a time until **22–32%** of the capture height is new content.
-Works on 13"-34" screens and RDP without `--wheel-notches`.
-
-## Safe Stitch
-
-Content-shift based stitching; prefers keeping data over removing duplicates.
+| Profile | Capture height | New content per frame |
+|---------|----------------|------------------------|
+| Default (large screen) | > 1000 px | 22–32% |
+| Small screen (~13") | ≤ 1000 px | 44–64% (2x step) |
 
 ## Debug
 
 ```bat
-scroll_capture_v1.0.4.exe --save-frames ./debug
+scroll_capture_v1.0.6.exe --save-frames ./debug
 ```
-
-## Output
-
-`long_screenshot_YYYY-MM-DD_HH-MM-SS.png`

@@ -9,6 +9,9 @@
 
 #define SC_MIN_NEW_FRAC 0.22
 #define SC_MAX_NEW_FRAC 0.32
+#define SC_MIN_NEW_FRAC_SMALL 0.44
+#define SC_MAX_NEW_FRAC_SMALL 0.64
+#define SC_SMALL_SCREEN_HEIGHT 1000
 #define SC_MAX_MICRO_STEPS 80
 #define SC_MICRO_DELAY_SEC 0.05
 
@@ -138,6 +141,7 @@ int sc_pick_region_interactive(ScRegion *region);
 void sc_countdown(int seconds, const char *message);
 
 int sc_focus_region(const ScRegion *region);
+void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScrollSettings *scroll);
 void sc_scroll_one_notch(const ScRegion *region, const ScScrollSettings *scroll);
 
 int sc_capture_region(const ScRegion *region, ScImage *out);

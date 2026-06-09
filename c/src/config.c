@@ -32,8 +32,9 @@ static int parse_double(const char *value, double *out) {
 void sc_config_print_help(const char *prog) {
     printf(
         "Usage: %s [options]\n\n"
-        "Scroll is adaptive: 1 wheel notch at a time until %.0f-%.0f%% of the\n"
-        "capture height is new content (safe for 13\"-34\" screens and RDP).\n\n"
+        "Scroll is adaptive: 1 wheel notch at a time until new content reaches\n"
+        "  default (height > %d): %.0f-%.0f%% of capture height\n"
+        "  small screen (height <= %d, ~13\"): %.0f-%.0f%% (2x step)\n\n"
         "Options:\n"
         "  --region L,T,W,H         Capture region\n"
         "  -o, --output FILE        Output PNG path\n"
@@ -49,8 +50,12 @@ void sc_config_print_help(const char *prog) {
         "  --version                Show version\n"
         "  -h, --help               Show help\n",
         prog,
+        SC_SMALL_SCREEN_HEIGHT,
         SC_MIN_NEW_FRAC * 100.0,
         SC_MAX_NEW_FRAC * 100.0,
+        SC_SMALL_SCREEN_HEIGHT,
+        SC_MIN_NEW_FRAC_SMALL * 100.0,
+        SC_MAX_NEW_FRAC_SMALL * 100.0,
         SC_MICRO_DELAY_SEC
     );
 }

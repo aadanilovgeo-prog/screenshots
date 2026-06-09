@@ -9,6 +9,25 @@
 #define SC_STABLE_DIFF 0.0035
 #define SC_MIN_ACCEPT_NEW_FRAC 0.08
 
+void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScrollSettings *scroll) {
+    if (!scroll) {
+        return;
+    }
+
+    scroll->micro_delay = cfg && cfg->micro_delay > 0.0 ? cfg->micro_delay : SC_MICRO_DELAY_SEC;
+    scroll->max_micro_steps = SC_MAX_MICRO_STEPS;
+    scroll->focus_click = cfg && !cfg->no_focus_click;
+    scroll->focus_each_step = cfg && cfg->focus_each_step;
+
+    if (region && region->height > 0 && region->height <= SC_SMALL_SCREEN_HEIGHT) {
+        scroll->min_new_frac = SC_MIN_NEW_FRAC_SMALL;
+        scroll->max_new_frac = SC_MAX_NEW_FRAC_SMALL;
+    } else {
+        scroll->min_new_frac = SC_MIN_NEW_FRAC;
+        scroll->max_new_frac = SC_MAX_NEW_FRAC;
+    }
+}
+
 int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
     ScImage *a;
     ScImage *b;

@@ -33,12 +33,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    scroll.micro_delay = cfg.micro_delay;
-    scroll.min_new_frac = SC_MIN_NEW_FRAC;
-    scroll.max_new_frac = SC_MAX_NEW_FRAC;
-    scroll.max_micro_steps = SC_MAX_MICRO_STEPS;
-    scroll.focus_click = cfg.no_focus_click ? 0 : 1;
-    scroll.focus_each_step = cfg.focus_each_step;
+    sc_scroll_settings_init(&region, &cfg, &scroll);
 
     if (cfg.has_save_frames) {
         sc_mkdir_p(cfg.save_frames_dir);
@@ -51,13 +46,14 @@ int main(int argc, char **argv) {
 
     printf(
         "Region: %d,%d %dx%d\n"
-        "Adaptive scroll: %.0f-%.0f%% new content per frame, safe_stitch=%s\n",
+        "Adaptive scroll: %.0f-%.0f%% new content per frame (%s), safe_stitch=%s\n",
         region.left,
         region.top,
         region.width,
         region.height,
         scroll.min_new_frac * 100.0,
         scroll.max_new_frac * 100.0,
+        region.height <= SC_SMALL_SCREEN_HEIGHT ? "small screen profile" : "default profile",
         cfg.safe_stitch ? "on" : "off"
     );
 
