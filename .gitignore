@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 scroll_capture_*.png
 frames/
+
+# Build artifacts
+c/stitch_test
+c/scroll_capture.exe
+*.o
+
