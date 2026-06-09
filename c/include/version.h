@@ -1,4 +1,4 @@
 #ifndef SC_VERSION_H
 #define SC_VERSION_H
-#define SC_VERSION "1.0.4"
+#define SC_VERSION "1.0.5"
 #endif
