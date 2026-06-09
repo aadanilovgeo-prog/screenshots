@@ -7,6 +7,7 @@
 #include "version.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 void sc_sleep_ms(int milliseconds) {
@@ -15,9 +16,19 @@ void sc_sleep_ms(int milliseconds) {
 
 void sc_get_cursor_pos(int *x, int *y) {
     POINT pt;
+    if (x) {
+        *x = 0;
+    }
+    if (y) {
+        *y = 0;
+    }
     if (GetCursorPos(&pt)) {
-        *x = (int)pt.x;
-        *y = (int)pt.y;
+        if (x) {
+            *x = (int)pt.x;
+        }
+        if (y) {
+            *y = (int)pt.y;
+        }
     }
 }
 

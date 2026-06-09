@@ -16,7 +16,7 @@ if %ERRORLEVEL% EQU 0 (
   echo Building with MSVC...
   rc /nologo /fo %RES% %RC%
   if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
-  cl /nologo /O2 /W4 /Iinclude %SRC% /Fe:%OUT% /link user32.lib gdi32.lib %RES%
+  cl /nologo /O2 /W4 /MT /Iinclude %SRC% /Fe:%OUT% /link user32.lib gdi32.lib %RES%
   if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
   del /q *.obj 2>nul
   goto done
