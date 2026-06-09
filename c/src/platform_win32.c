@@ -170,16 +170,16 @@ int sc_capture_region(const ScRegion *region, ScImage *out) {
 int sc_pick_region_interactive(ScRegion *region) {
     int x1, y1, x2, y2;
 
-    printf("Интерактивный выбор области захвата.\n");
-    printf("Наведите курсор на ЛЕВЫЙ ВЕРХНИЙ угол статьи и нажмите Enter...\n");
+    printf("Interactive capture region selection.\n");
+    printf("Move cursor to TOP-LEFT corner of the article and press Enter...\n");
     getchar();
     sc_get_cursor_pos(&x1, &y1);
-    printf("  Верхний левый угол: (%d, %d)\n", x1, y1);
+    printf("  Top-left corner: (%d, %d)\n", x1, y1);
 
-    printf("Наведите курсор на ПРАВЫЙ НИЖНИЙ угол статьи и нажмите Enter...\n");
+    printf("Move cursor to BOTTOM-RIGHT corner of the article and press Enter...\n");
     getchar();
     sc_get_cursor_pos(&x2, &y2);
-    printf("  Нижний правый угол: (%d, %d)\n", x2, y2);
+    printf("  Bottom-right corner: (%d, %d)\n", x2, y2);
 
     region->left = x1 < x2 ? x1 : x2;
     region->top = y1 < y2 ? y1 : y2;
@@ -187,7 +187,7 @@ int sc_pick_region_interactive(ScRegion *region) {
     region->height = abs(y2 - y1);
 
     if (region->width < 50 || region->height < 50) {
-        fprintf(stderr, "Слишком маленькая область.\n");
+        fprintf(stderr, "Capture region is too small.\n");
         return 0;
     }
     return 1;
@@ -201,7 +201,7 @@ void sc_countdown(int seconds, const char *message) {
         fflush(stdout);
         sc_sleep_ms(1000);
     }
-    printf("  Старт!\n");
+    printf("  Start!\n");
 }
 
 int sc_make_default_output_path(char *buf, size_t buflen) {
@@ -258,7 +258,7 @@ int sc_capture_region(const ScRegion *region, ScImage *out) {
 
 int sc_pick_region_interactive(ScRegion *region) {
     (void)region;
-    fprintf(stderr, "Интерактивный режим доступен только на Windows.\n");
+    fprintf(stderr, "Interactive mode is only available on Windows.\n");
     return 0;
 }
 

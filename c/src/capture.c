@@ -34,7 +34,7 @@ int sc_capture_long_page(
     *reached_end = 0;
 
     if (scroll->focus_click) {
-        printf("Фокус на области статьи (клик мышью)...\n");
+        printf("Focusing article region (mouse click)...\n");
         sc_focus_region(region);
         sc_sleep_ms(200);
     }
@@ -58,7 +58,7 @@ int sc_capture_long_page(
         sc_save_png(frame_path, previous);
     }
 
-    printf("Захват первого кадра...\n");
+    printf("Capturing first frame...\n");
 
     for (index = 1; index <= max_frames; index++) {
         ScOverlapMatch match;
@@ -104,14 +104,14 @@ int sc_capture_long_page(
         (*overlap_count)++;
 
         printf(
-            "  Кадр %04d: отличие %.2f%%, перекрытие %dpx\n",
+            "  Frame %04d: diff %.2f%%, overlap %dpx\n",
             index,
             diff * 100.0,
             match.overlap
         );
 
         if (diff <= same_frame_threshold) {
-            printf("Страница, похоже, достигла конца (кадры совпадают).\n");
+            printf("End of page reached (frames are identical).\n");
             *reached_end = 1;
             (*overlap_count)--;
             sc_image_free(current);

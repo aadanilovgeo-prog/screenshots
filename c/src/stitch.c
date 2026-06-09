@@ -123,6 +123,39 @@ static int match_data_prepare(const ScImage *img, MatchData *md) {
     return 1;
 }
 
+static double strip_ssd(
+    const MatchData *above,
+    const MatchData *below,
+    int overlap,
+    int x0,
+    int x1
+) {
+    int y;
+    int x;
+    double ssd = 0.0;
+    int pixels = 0;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (x1 > above->width) {
+        x1 = above->width;
+    }
+    if (x0 >= x1) {
+        return 1e9;
+    }
+
+    for (y = 0; y < overlap; y++) {
+        const float *row_a = above->gray + (above->height - overlap + y) * above->width;
+        const float *row_b = below->gray + y * below->width;
+        for (x = x0; x < x1; x++) {
+            ssd += fabs((double)row_a[x] - (double)row_b[x]);
+            pixels++;
+        }
+    }
+    return ssd / (double)pixels;
+}
+
 static double overlap_cost(
     const MatchData *above,
     const MatchData *below,
@@ -130,22 +163,23 @@ static double overlap_cost(
     int preferred_overlap,
     int has_preferred
 ) {
-    int x;
-    int y;
-    double ssd = 0.0f;
-    int pixels = 0;
+    int w = above->width;
+    int s1 = w / 4;
+    int s2 = w / 2;
+    double ssd_left = strip_ssd(above, below, overlap, 0, s1);
+    double ssd_mid = strip_ssd(above, below, overlap, s1, s2);
+    double ssd_right = strip_ssd(above, below, overlap, s2, w);
+    double ssd = ssd_left;
     float ncc_int;
     float ncc_grad;
+    double cost;
 
-    for (y = 0; y < overlap; y++) {
-        const float *row_a = above->gray + (above->height - overlap + y) * above->width;
-        const float *row_b = below->gray + y * below->width;
-        for (x = 0; x < above->width; x++) {
-            ssd += fabs((double)row_a[x] - (double)row_b[x]);
-            pixels++;
-        }
+    if (ssd_mid > ssd) {
+        ssd = ssd_mid;
     }
-    ssd /= (double)pixels;
+    if (ssd_right > ssd) {
+        ssd = ssd_right;
+    }
 
     ncc_int = ncc(
         above->intensity_profile + above->height - overlap,
@@ -158,13 +192,17 @@ static double overlap_cost(
         overlap
     );
 
-    {
-        double cost = ssd - 45.0 * (double)ncc_int - 25.0 * (double)ncc_grad;
-        if (has_preferred) {
-            cost += 0.08 * fabs((double)overlap - (double)preferred_overlap);
+    cost = ssd - 45.0 * (double)ncc_int - 25.0 * (double)ncc_grad;
+    cost += 0.04 * (double)overlap;
+
+    if (has_preferred) {
+        if (overlap > preferred_overlap) {
+            cost += 0.35 * (double)(overlap - preferred_overlap);
+        } else {
+            cost += 0.08 * (double)(preferred_overlap - overlap);
         }
-        return cost;
     }
+    return cost;
 }
 
 int sc_overlap_search_bounds(
@@ -185,14 +223,14 @@ int sc_overlap_search_bounds(
     }
 
     if (has_preferred) {
-        min_o = preferred_overlap - 30;
-        max_o = preferred_overlap + 30;
+        min_o = preferred_overlap - 18;
+        max_o = preferred_overlap + 12;
     } else if (expected_overlap > 0) {
-        min_o = expected_overlap - 80;
-        max_o = expected_overlap + 80;
+        min_o = expected_overlap - 60;
+        max_o = expected_overlap + 40;
     } else {
-        int min_scroll = (int)(estimated_scroll * 0.75);
-        int max_scroll = (int)(estimated_scroll * 1.25);
+        int min_scroll = (int)(estimated_scroll * 0.85);
+        int max_scroll = (int)(estimated_scroll * 1.10);
         min_o = frame_height - max_scroll;
         max_o = frame_height - min_scroll;
     }

@@ -175,6 +175,12 @@ def overlap_search_bounds(
     return min_overlap, max_overlap
 
 
+def _strip_ssd(gray_above: np.ndarray, gray_below: np.ndarray, overlap: int, x0: int, x1: int) -> float:
+    patch_above = gray_above[gray_above.shape[0] - overlap : gray_above.shape[0], x0:x1]
+    patch_below = gray_below[:overlap, x0:x1]
+    return float(np.mean(np.abs(patch_above - patch_below)))
+
+
 def _overlap_cost(
     gray_above: np.ndarray,
     gray_below: np.ndarray,
@@ -186,16 +192,22 @@ def _overlap_cost(
     preferred_overlap: int | None = None,
 ) -> float:
     ha = gray_above.shape[0]
-    patch_above = gray_above[ha - overlap : ha]
-    patch_below = gray_below[:overlap]
-    ssd = float(np.mean(np.abs(patch_above - patch_below)))
+    w = gray_above.shape[1]
+    s1, s2 = w // 4, w // 2
+    ssd = _strip_ssd(gray_above, gray_below, overlap, 0, s1)
+    ssd = max(ssd, _strip_ssd(gray_above, gray_below, overlap, s1, s2))
+    ssd = max(ssd, _strip_ssd(gray_above, gray_below, overlap, s2, w))
 
     ncc_int = _ncc(prof_above[ha - overlap : ha], prof_below[:overlap])
     ncc_grad = _ncc(gprof_above[ha - overlap : ha], gprof_below[:overlap])
 
     cost = ssd - 45.0 * ncc_int - 25.0 * ncc_grad
+    cost += 0.04 * overlap
     if preferred_overlap is not None:
-        cost += 0.08 * abs(overlap - preferred_overlap)
+        if overlap > preferred_overlap:
+            cost += 0.35 * (overlap - preferred_overlap)
+        else:
+            cost += 0.08 * (preferred_overlap - overlap)
     return cost
 
 
@@ -263,8 +275,9 @@ def stabilize_overlaps(overlaps: list[int], scores: list[float]) -> list[int]:
     median_overlap = int(np.median(overlaps))
     stabilized: list[int] = []
     for overlap, score in zip(overlaps, scores):
-        if abs(overlap - median_overlap) > 90:
-            stabilized.append(median_overlap)
+        if abs(overlap - median_overlap) > 60:
+            fixed = median_overlap - 10
+            stabilized.append(fixed if fixed >= 40 else median_overlap)
         else:
             stabilized.append(overlap)
 
@@ -469,7 +482,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--wheel-notches",
         dest="wheel_notches",
         type=int,
-        default=14,
+        default=8,
         help="Сколько «щелчков» колёсика за один шаг (меньше = больше перекрытие, аккуратнее склейка)",
     )
     parser.add_argument(
