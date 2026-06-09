@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
     scroll.wheel_notches = cfg.wheel_notches;
     scroll.micro_steps = cfg.micro_steps;
     scroll.micro_delay = cfg.micro_delay;
-    scroll.focus_click = cfg.focus_click;
+    scroll.focus_click = !cfg.no_focus_click;
     scroll.focus_each_step = cfg.focus_each_step;
 
     expected_overlap = cfg.expected_overlap;
