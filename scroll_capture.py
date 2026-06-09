@@ -28,6 +28,7 @@ pyautogui.PAUSE = 0.02
 
 WHEEL_DELTA = 120
 MOUSEEVENTF_WHEEL = 0x0800
+PX_PER_WHEEL_NOTCH = 35
 
 
 @dataclass
@@ -66,6 +67,12 @@ class ScrollSettings:
     micro_delay: float
     focus_click: bool
     focus_before_each_step: bool
+
+
+@dataclass
+class OverlapMatch:
+    overlap: int
+    score: float
 
 
 def parse_region(value: str) -> Region:
@@ -124,44 +131,165 @@ def image_diff_ratio(a: Image.Image, b: Image.Image) -> float:
     return float(np.mean(np.abs(arr_a - arr_b)) / 255.0)
 
 
-def find_vertical_overlap(img_above: Image.Image, img_below: Image.Image, max_search: int) -> int:
-    width = img_above.width
-    height = min(img_above.height, img_below.height)
-    max_search = min(max_search, height - 20)
-    if max_search < 20:
-        return 0
+def _ncc(a: np.ndarray, b: np.ndarray) -> float:
+    if len(a) < 2:
+        return 0.0
+    a = a - float(a.mean())
+    b = b - float(b.mean())
+    denom = float(np.sqrt(np.sum(a * a) * np.sum(b * b))) + 1e-6
+    return float(np.sum(a * b) / denom)
 
-    above = np.asarray(img_above, dtype=np.int16)
-    below = np.asarray(img_below, dtype=np.int16)
 
-    best_overlap = 0
-    best_score = float("inf")
+def _prepare_match_arrays(img: Image.Image) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    gray = np.asarray(img.convert("L"), dtype=np.float32)
+    height, width = gray.shape
+    margin_x = max(8, int(width * 0.12))
+    gray = gray[:, margin_x : width - margin_x]
+    gradient = np.abs(np.diff(gray, axis=0))
+    gradient = np.vstack([gradient, gradient[-1:]])
+    intensity_profile = gray.mean(axis=1)
+    gradient_profile = gradient.mean(axis=1)
+    return gray, intensity_profile, gradient_profile
 
-    for overlap in range(20, max_search + 1):
-        region_above = above[height - overlap : height, :width]
-        region_below = below[:overlap, :width]
-        score = float(np.mean(np.abs(region_above - region_below)))
-        if score < best_score:
-            best_score = score
+
+def overlap_search_bounds(
+    frame_height: int,
+    wheel_notches: int,
+    expected_overlap: int = 0,
+    preferred_overlap: int | None = None,
+) -> tuple[int, int]:
+    estimated_scroll = max(40, wheel_notches * PX_PER_WHEEL_NOTCH)
+    if preferred_overlap is not None:
+        min_overlap = max(40, preferred_overlap - 30)
+        max_overlap = min(frame_height - 40, preferred_overlap + 30)
+    elif expected_overlap > 0:
+        min_overlap = max(40, expected_overlap - 80)
+        max_overlap = min(frame_height - 40, expected_overlap + 80)
+    else:
+        min_scroll = int(estimated_scroll * 0.75)
+        max_scroll = int(estimated_scroll * 1.25)
+        min_overlap = max(40, frame_height - max_scroll)
+        max_overlap = min(frame_height - 40, frame_height - min_scroll)
+    if min_overlap >= max_overlap:
+        min_overlap, max_overlap = 40, frame_height - 40
+    return min_overlap, max_overlap
+
+
+def _overlap_cost(
+    gray_above: np.ndarray,
+    gray_below: np.ndarray,
+    prof_above: np.ndarray,
+    prof_below: np.ndarray,
+    gprof_above: np.ndarray,
+    gprof_below: np.ndarray,
+    overlap: int,
+    preferred_overlap: int | None = None,
+) -> float:
+    ha = gray_above.shape[0]
+    patch_above = gray_above[ha - overlap : ha]
+    patch_below = gray_below[:overlap]
+    ssd = float(np.mean(np.abs(patch_above - patch_below)))
+
+    ncc_int = _ncc(prof_above[ha - overlap : ha], prof_below[:overlap])
+    ncc_grad = _ncc(gprof_above[ha - overlap : ha], gprof_below[:overlap])
+
+    cost = ssd - 45.0 * ncc_int - 25.0 * ncc_grad
+    if preferred_overlap is not None:
+        cost += 0.08 * abs(overlap - preferred_overlap)
+    return cost
+
+
+def find_vertical_overlap(
+    img_above: Image.Image,
+    img_below: Image.Image,
+    *,
+    min_overlap: int,
+    max_overlap: int,
+    preferred_overlap: int | None = None,
+) -> OverlapMatch:
+    gray_above, prof_above, gprof_above = _prepare_match_arrays(img_above)
+    gray_below, prof_below, gprof_below = _prepare_match_arrays(img_below)
+
+    height = min(gray_above.shape[0], gray_below.shape[0])
+    max_overlap = min(max_overlap, height - 20, gray_above.shape[0] - 10, gray_below.shape[0] - 10)
+    min_overlap = max(20, min_overlap)
+
+    if min_overlap >= max_overlap:
+        fallback = max(20, min(min_overlap, max_overlap))
+        return OverlapMatch(overlap=fallback, score=1.0)
+
+    best_overlap = min_overlap
+    best_cost = float("inf")
+
+    for overlap in range(min_overlap, max_overlap + 1, 2):
+        cost = _overlap_cost(
+            gray_above,
+            gray_below,
+            prof_above,
+            prof_below,
+            gprof_above,
+            gprof_below,
+            overlap,
+            preferred_overlap,
+        )
+        if cost < best_cost:
+            best_cost = cost
             best_overlap = overlap
 
-    return best_overlap
+    fine_min = max(min_overlap, best_overlap - 8)
+    fine_max = min(max_overlap, best_overlap + 8)
+    for overlap in range(fine_min, fine_max + 1):
+        cost = _overlap_cost(
+            gray_above,
+            gray_below,
+            prof_above,
+            prof_below,
+            gprof_above,
+            gprof_below,
+            overlap,
+            preferred_overlap,
+        )
+        if cost < best_cost:
+            best_cost = cost
+            best_overlap = overlap
+
+    return OverlapMatch(overlap=best_overlap, score=best_cost)
 
 
-def stitch_frames(frames: list[Image.Image], expected_overlap: int) -> Image.Image:
+def stabilize_overlaps(overlaps: list[int], scores: list[float]) -> list[int]:
+    if len(overlaps) <= 2:
+        return overlaps
+
+    median_overlap = int(np.median(overlaps))
+    stabilized: list[int] = []
+    for overlap, score in zip(overlaps, scores):
+        if abs(overlap - median_overlap) > 90:
+            stabilized.append(median_overlap)
+        else:
+            stabilized.append(overlap)
+
+    smoothed: list[int] = []
+    for index in range(len(stabilized)):
+        start = max(0, index - 1)
+        end = min(len(stabilized), index + 2)
+        window = sorted(stabilized[start:end])
+        smoothed.append(window[len(window) // 2])
+    return smoothed
+
+
+def stitch_frames(frames: list[Image.Image], overlaps: list[int]) -> Image.Image:
     if not frames:
         raise ValueError("Нет кадров для склейки")
     if len(frames) == 1:
         return frames[0].copy()
 
-    search_range = max(expected_overlap + 80, frames[0].height // 2)
-    pieces: list[Image.Image] = [frames[0]]
+    if len(overlaps) != len(frames) - 1:
+        raise ValueError("Число перекрытий должно быть на 1 меньше числа кадров")
 
-    for frame in frames[1:]:
-        overlap = find_vertical_overlap(pieces[-1], frame, search_range)
-        if overlap <= 0:
-            overlap = min(expected_overlap, frame.height - 1)
-        pieces.append(frame.crop((0, overlap, frame.width, frame.height)))
+    pieces: list[Image.Image] = [frames[0]]
+    for index in range(1, len(frames)):
+        overlap = max(1, min(overlaps[index - 1], frames[index].height - 1))
+        pieces.append(frames[index].crop((0, overlap, frames[index].width, frames[index].height)))
 
     total_height = sum(img.height for img in pieces)
     result = Image.new("RGB", (pieces[0].width, total_height))
@@ -183,7 +311,6 @@ def focus_region(region: Region) -> None:
 def _win32_wheel_at(x: int, y: int, notches_down: int) -> None:
     user32 = ctypes.windll.user32
     user32.SetCursorPos(x, y)
-    # Отрицательное значение = прокрутка вниз (WM_MOUSEWHEEL).
     delta = int(-WHEEL_DELTA * notches_down)
     user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta & 0xFFFFFFFF, 0)
 
@@ -242,10 +369,15 @@ def capture_long_page(
     settle_delay: float,
     max_frames: int,
     same_frame_threshold: float,
+    expected_overlap: int,
     save_frames_dir: Path | None,
-) -> tuple[list[Image.Image], bool]:
+) -> tuple[list[Image.Image], list[int], bool]:
     frames: list[Image.Image] = []
+    overlaps: list[int] = []
+    overlap_scores: list[float] = []
     reached_end = False
+
+    preferred_overlap: int | None = expected_overlap if expected_overlap > 0 else None
 
     if scroll.focus_click:
         print("Фокус на области статьи (клик мышью)...")
@@ -267,11 +399,32 @@ def capture_long_page(
             time.sleep(settle_delay)
 
             diff = image_diff_ratio(previous, current)
-            print(f"  Кадр {index:04d}: отличие от предыдущего {diff * 100:.2f}%")
+            min_overlap, max_overlap = overlap_search_bounds(
+                region.height,
+                scroll.wheel_notches,
+                expected_overlap,
+                preferred_overlap,
+            )
+            match = find_vertical_overlap(
+                previous,
+                current,
+                min_overlap=min_overlap,
+                max_overlap=max_overlap,
+                preferred_overlap=preferred_overlap,
+            )
+            preferred_overlap = match.overlap
+            overlaps.append(match.overlap)
+            overlap_scores.append(match.score)
+            print(
+                f"  Кадр {index:04d}: отличие {diff * 100:.2f}%, "
+                f"перекрытие {match.overlap}px"
+            )
 
             if diff <= same_frame_threshold:
                 print("Страница, похоже, достигла конца (кадры совпадают).")
                 reached_end = True
+                overlaps.pop()
+                overlap_scores.pop()
                 break
 
             frames.append(current.copy())
@@ -279,7 +432,8 @@ def capture_long_page(
                 current.save(save_frames_dir / f"frame_{index:04d}.png")
             previous = current
 
-    return frames, reached_end
+    overlaps = stabilize_overlaps(overlaps, overlap_scores)
+    return frames, overlaps, reached_end
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -315,8 +469,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--wheel-notches",
         dest="wheel_notches",
         type=int,
-        default=20,
-        help="Сколько «щелчков» колёсика за один шаг прокрутки",
+        default=14,
+        help="Сколько «щелчков» колёсика за один шаг (меньше = больше перекрытие, аккуратнее склейка)",
     )
     parser.add_argument(
         "--micro-steps",
@@ -399,13 +553,18 @@ def main() -> int:
         focus_before_each_step=args.focus_each_step,
     )
 
+    expected_overlap = args.expected_overlap
+    if expected_overlap <= 0:
+        estimated_scroll = max(40, args.wheel_notches * PX_PER_WHEEL_NOTCH)
+        expected_overlap = max(region.height - estimated_scroll, region.height // 3)
+
     print(
         f"Область захвата: left={region.left}, top={region.top}, "
         f"width={region.width}, height={region.height}"
     )
     print(
         f"Прокрутка: метод={scroll.method}, щелчков за шаг={scroll.wheel_notches}, "
-        f"микро-шагов={scroll.micro_steps}"
+        f"микро-шагов={scroll.micro_steps}, ожидаемое перекрытие ~{expected_overlap}px"
     )
     print("Экстренная остановка: резко переместите мышь в левый верхний угол экрана (pyautogui FAILSAFE).")
 
@@ -417,13 +576,14 @@ def main() -> int:
         "Переключитесь в окно VRM/браузера со статьёй. Захват начнётся через:",
     )
 
-    frames, reached_end = capture_long_page(
+    frames, overlaps, reached_end = capture_long_page(
         region,
         scroll,
         scroll_delay=args.scroll_delay,
         settle_delay=args.settle_delay,
         max_frames=args.max_frames,
         same_frame_threshold=args.same_frame_threshold,
+        expected_overlap=expected_overlap,
         save_frames_dir=args.save_frames,
     )
 
@@ -437,10 +597,12 @@ def main() -> int:
         return 1
 
     print(f"Склеивание {len(frames)} кадров...")
-    expected_overlap = args.expected_overlap
-    if expected_overlap <= 0:
-        expected_overlap = max(region.height - args.wheel_notches * 30, region.height // 4)
-    result = stitch_frames(frames, expected_overlap)
+    if overlaps:
+        print(
+            "  Перекрытия после стабилизации: "
+            f"min={min(overlaps)}, max={max(overlaps)}, median={int(np.median(overlaps))} px"
+        )
+    result = stitch_frames(frames, overlaps)
 
     output = args.output
     if output is None:
