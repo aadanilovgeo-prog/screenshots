@@ -15,6 +15,7 @@ int main(int argc, char **argv) {
     int *crops;
     int crop_count = 0;
     int reached_end = 0;
+    int user_stopped = 0;
     int parse_result;
     char output_path[512];
 
@@ -46,15 +47,16 @@ int main(int argc, char **argv) {
 
     printf(
         "Region: %d,%d %dx%d\n"
-        "Adaptive scroll: %.0f-%.0f%% new content per frame (%s), safe_stitch=%s\n",
+        "Adaptive scroll: %.0f-%.0f%% new/frame, %d wheel notch(es)/step (%s)\n"
+        "Press ESC during capture to stitch collected frames.\n",
         region.left,
         region.top,
         region.width,
         region.height,
         scroll.min_new_frac * 100.0,
         scroll.max_new_frac * 100.0,
-        region.height <= SC_SMALL_SCREEN_HEIGHT ? "small screen profile" : "default profile",
-        cfg.safe_stitch ? "on" : "off"
+        scroll.notches_per_step,
+        region.height <= SC_SMALL_SCREEN_HEIGHT ? "small screen" : "large screen"
     );
 
     sc_countdown(cfg.countdown, "Switch to the VRM window with the article. Capture starts in:");
@@ -80,6 +82,7 @@ int main(int argc, char **argv) {
             crops,
             &crop_count,
             &reached_end,
+            &user_stopped,
             &stitch_log
         )) {
         fprintf(stderr, "Capture failed.\n");
@@ -97,7 +100,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (frames.count < 2 && !reached_end) {
+    if (frames.count < 2 && !reached_end && !user_stopped) {
         fprintf(
             stderr,
             "Only one frame captured - scrolling did not work.\n"
@@ -109,7 +112,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    printf("Stitching %d frames (safe mode, per-seam crop)...\n", frames.count);
+    if (user_stopped) {
+        printf("Partial capture: stitching %d frame(s) after ESC...\n", frames.count);
+    } else {
+        printf("Stitching %d frames (safe mode, per-seam crop)...\n", frames.count);
+    }
+
     result = sc_stitch_frames_safe(&frames, crops, crop_count);
     if (!result) {
         fprintf(stderr, "Stitching failed.\n");
@@ -136,7 +144,9 @@ int main(int argc, char **argv) {
 
     printf("Done: %s\n", output_path);
     printf("Output image size: %d x %d px\n", result->width, result->height);
-    if (!reached_end) {
+    if (user_stopped) {
+        printf("Note: capture was stopped early with ESC (partial screenshot).\n");
+    } else if (!reached_end) {
         printf("Warning: max frame limit reached before end of page. Increase --max-frames if needed.\n");
     }
 

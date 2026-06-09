@@ -7,11 +7,13 @@
 #define SC_WHEEL_DELTA 120
 #define SC_MAX_FRAMES 600
 
-#define SC_MIN_NEW_FRAC 0.44
-#define SC_MAX_NEW_FRAC 0.64
-#define SC_MIN_NEW_FRAC_SMALL 0.66
-#define SC_MAX_NEW_FRAC_SMALL 0.82
+#define SC_MIN_NEW_FRAC 0.22
+#define SC_MAX_NEW_FRAC 0.32
+#define SC_MIN_NEW_FRAC_SMALL 0.44
+#define SC_MAX_NEW_FRAC_SMALL 0.64
 #define SC_SMALL_SCREEN_HEIGHT 1000
+#define SC_NOTCHES_PER_STEP 2
+#define SC_NOTCHES_PER_STEP_SMALL 4
 #define SC_MAX_MICRO_STEPS 80
 #define SC_MICRO_DELAY_SEC 0.05
 
@@ -39,6 +41,7 @@ typedef struct {
     double min_new_frac;
     double max_new_frac;
     int max_micro_steps;
+    int notches_per_step;
     int focus_click;
     int focus_each_step;
 } ScScrollSettings;
@@ -142,7 +145,8 @@ void sc_countdown(int seconds, const char *message);
 
 int sc_focus_region(const ScRegion *region);
 void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScrollSettings *scroll);
-void sc_scroll_one_notch(const ScRegion *region, const ScScrollSettings *scroll);
+void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll);
+int sc_consume_stop_request(void);
 
 int sc_capture_region(const ScRegion *region, ScImage *out);
 int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out);
@@ -164,6 +168,7 @@ int sc_capture_long_page(
     int *crops,
     int *crop_count,
     int *reached_end,
+    int *user_stopped,
     ScStitchLog *log
 );
 

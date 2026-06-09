@@ -22,9 +22,11 @@ void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScro
     if (region && region->height > 0 && region->height <= SC_SMALL_SCREEN_HEIGHT) {
         scroll->min_new_frac = SC_MIN_NEW_FRAC_SMALL;
         scroll->max_new_frac = SC_MAX_NEW_FRAC_SMALL;
+        scroll->notches_per_step = SC_NOTCHES_PER_STEP_SMALL;
     } else {
         scroll->min_new_frac = SC_MIN_NEW_FRAC;
         scroll->max_new_frac = SC_MAX_NEW_FRAC;
+        scroll->notches_per_step = SC_NOTCHES_PER_STEP;
     }
 }
 
@@ -79,6 +81,9 @@ int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
     return 1;
 }
 
+#define SC_SCROLL_END 2
+#define SC_SCROLL_STOP 3
+
 static int adaptive_scroll_to_target(
     const ScRegion *region,
     const ScScrollSettings *scroll,
@@ -109,8 +114,16 @@ static int adaptive_scroll_to_target(
     memset(shift, 0, sizeof(*shift));
 
     for (micro = 0; micro < scroll->max_micro_steps; micro++) {
-        sc_scroll_one_notch(region, scroll);
+        if (sc_consume_stop_request()) {
+            return SC_SCROLL_STOP;
+        }
+
+        sc_scroll_wheel_step(region, scroll);
         sc_sleep_ms((int)(scroll->micro_delay * 1000.0));
+
+        if (sc_consume_stop_request()) {
+            return SC_SCROLL_STOP;
+        }
 
         if (!sc_wait_for_frame_stable(region, current)) {
             return 0;
@@ -118,7 +131,7 @@ static int adaptive_scroll_to_target(
 
         diff = sc_image_diff_ratio(previous, current);
         if (diff <= same_frame_threshold) {
-            return 2;
+            return SC_SCROLL_END;
         }
 
         if (!sc_detect_vertical_content_shift(previous, current, shift)) {
@@ -186,6 +199,7 @@ int sc_capture_long_page(
     int *crops,
     int *crop_count,
     int *reached_end,
+    int *user_stopped,
     ScStitchLog *log
 ) {
     ScImage *previous = NULL;
@@ -201,6 +215,9 @@ int sc_capture_long_page(
 
     *crop_count = 0;
     *reached_end = 0;
+    if (user_stopped) {
+        *user_stopped = 0;
+    }
 
     if (scroll->focus_click) {
         printf("Focusing article region (mouse click)...\n");
@@ -228,9 +245,11 @@ int sc_capture_long_page(
     }
 
     printf(
-        "Capturing first frame (adaptive scroll %.0f-%.0f%% new content, safe stitch=%s)...\n",
+        "Capturing (target %.0f-%.0f%% new/frame, %d notch(es)/step, safe stitch=%s).\n"
+        "Press ESC to stop capture and stitch collected frames.\n",
         scroll->min_new_frac * 100.0,
         scroll->max_new_frac * 100.0,
+        scroll->notches_per_step,
         safe_stitch ? "on" : "off"
     );
 
@@ -238,6 +257,14 @@ int sc_capture_long_page(
         ScShiftData shift;
         ScSafeCrop safe_crop;
         int scroll_result;
+
+        if (sc_consume_stop_request()) {
+            printf("ESC pressed — stopping capture, will stitch %d frame(s).\n", frames->count);
+            if (user_stopped) {
+                *user_stopped = 1;
+            }
+            break;
+        }
 
         current = sc_image_create(region->width, region->height);
         if (!current) {
@@ -253,7 +280,15 @@ int sc_capture_long_page(
             same_frame_threshold
         );
 
-        if (scroll_result == 2) {
+        if (scroll_result == SC_SCROLL_STOP) {
+            printf("ESC pressed — stopping capture, will stitch %d frame(s).\n", frames->count);
+            sc_image_free(current);
+            if (user_stopped) {
+                *user_stopped = 1;
+            }
+            break;
+        }
+        if (scroll_result == SC_SCROLL_END) {
             printf("End of page reached (no content change after scroll).\n");
             *reached_end = 1;
             sc_image_free(current);

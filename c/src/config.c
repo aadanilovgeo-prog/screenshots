@@ -32,9 +32,10 @@ static int parse_double(const char *value, double *out) {
 void sc_config_print_help(const char *prog) {
     printf(
         "Usage: %s [options]\n\n"
-        "Scroll is adaptive: 1 wheel notch at a time until new content reaches\n"
-        "  default (height > %d): %.0f-%.0f%% of capture height\n"
-        "  small screen (height <= %d, ~13\"): %.0f-%.0f%%\n\n"
+        "Scroll is adaptive: wheel step size and target new content depend on capture height.\n"
+        "  large (height > %d): %d notches/step, target %.0f-%.0f%% new content\n"
+        "  small (height <= %d): %d notches/step, target %.0f-%.0f%% new content\n"
+        "Press ESC during capture to stop and stitch collected frames.\n\n"
         "Options:\n"
         "  --region L,T,W,H         Capture region\n"
         "  -o, --output FILE        Output PNG path\n"
@@ -51,9 +52,11 @@ void sc_config_print_help(const char *prog) {
         "  -h, --help               Show help\n",
         prog,
         SC_SMALL_SCREEN_HEIGHT,
+        SC_NOTCHES_PER_STEP,
         SC_MIN_NEW_FRAC * 100.0,
         SC_MAX_NEW_FRAC * 100.0,
         SC_SMALL_SCREEN_HEIGHT,
+        SC_NOTCHES_PER_STEP_SMALL,
         SC_MIN_NEW_FRAC_SMALL * 100.0,
         SC_MAX_NEW_FRAC_SMALL * 100.0,
         SC_MICRO_DELAY_SEC
