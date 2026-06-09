@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     int i;
 
 #ifndef _WIN32
-    fprintf(stderr, "Внимание: полная функциональность реализована для Windows.\n");
+    fprintf(stderr, "Note: full functionality is available on Windows only.\n");
 #endif
 
     if (argc < 2) {
@@ -81,29 +81,29 @@ int main(int argc, char **argv) {
     }
 
     printf(
-        "Область захвата: left=%d, top=%d, width=%d, height=%d\n",
+        "Capture region: left=%d, top=%d, width=%d, height=%d\n",
         region.left,
         region.top,
         region.width,
         region.height
     );
     printf(
-        "Прокрутка: щелчков за шаг=%d, микро-шагов=%d, ожидаемое перекрытие ~%dpx\n",
+        "Scroll: wheel_notches=%d, micro_steps=%d, expected_overlap~%dpx\n",
         scroll.wheel_notches,
         scroll.micro_steps,
         expected_overlap
     );
-    printf("Экстренная остановка: закройте окно консоли или Ctrl+C.\n");
+    printf("Emergency stop: close console window or press Ctrl+C.\n");
 
     if (cfg.has_save_frames) {
         sc_mkdir_p(cfg.save_frames_dir);
     }
 
-    sc_countdown(cfg.countdown, "Переключитесь в окно VRM/браузера со статьёй. Захват начнётся через:");
+    sc_countdown(cfg.countdown, "Switch to the VRM/browser window with the article. Capture starts in:");
 
     overlaps = (int *)calloc((size_t)cfg.max_frames, sizeof(int));
     if (!overlaps) {
-        fprintf(stderr, "Недостаточно памяти.\n");
+        fprintf(stderr, "Out of memory.\n");
         return 1;
     }
 
@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
             &overlap_count,
             &reached_end
         )) {
-        fprintf(stderr, "Ошибка захвата.\n");
+        fprintf(stderr, "Capture failed.\n");
         free(overlaps);
         sc_frame_list_clear(&frames);
         return 1;
@@ -132,15 +132,15 @@ int main(int argc, char **argv) {
     if (frames.count < 2 && !reached_end) {
         fprintf(
             stderr,
-            "Получен только один кадр — прокрутка не сработала.\n"
-            "Попробуйте: --wheel-notches 20 --focus-each-step --scroll-delay 1.0\n"
+            "Only one frame captured - scrolling did not work.\n"
+            "Try: --wheel-notches 12 --focus-each-step --scroll-delay 1.0\n"
         );
         free(overlaps);
         sc_frame_list_clear(&frames);
         return 1;
     }
 
-    printf("Склеивание %d кадров...\n", frames.count);
+    printf("Stitching %d frames...\n", frames.count);
     if (overlap_count > 0) {
         for (i = 0; i < overlap_count; i++) {
             if (i == 0) {
@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
             }
         }
         printf(
-            "  Перекрытия после стабилизации: min=%d, max=%d, median=%d px\n",
+            "  Overlaps after stabilization: min=%d, max=%d, median=%d px\n",
             min_overlap,
             max_overlap,
             median_overlap(overlaps, overlap_count)
@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
 
     result = sc_stitch_frames(&frames, overlaps, overlap_count);
     if (!result) {
-        fprintf(stderr, "Ошибка склейки.\n");
+        fprintf(stderr, "Stitching failed.\n");
         free(overlaps);
         sc_frame_list_clear(&frames);
         return 1;
@@ -184,10 +184,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    printf("Готово: %s\n", output_path);
-    printf("Размер итогового изображения: %d x %d px\n", result->width, result->height);
+    printf("Done: %s\n", output_path);
+    printf("Output image size: %d x %d px\n", result->width, result->height);
     if (!reached_end) {
-        printf("Внимание: лимит кадров исчерпан до конца страницы. Увеличьте --max-frames при необходимости.\n");
+        printf("Warning: max frame limit reached before end of page. Increase --max-frames if needed.\n");
     }
 
     sc_image_free(result);

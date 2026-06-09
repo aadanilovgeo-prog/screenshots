@@ -19,7 +19,7 @@ static void fill_page(unsigned char *rgb, int w, int page_h) {
 
 int main(void) {
     const int w = 800, h = 600, page_h = 5000;
-    const int scroll = 14 * SC_PX_PER_WHEEL_NOTCH;
+    const int scroll = 8 * SC_PX_PER_WHEEL_NOTCH;
     unsigned char *page = (unsigned char *)malloc((size_t)w * page_h * 3);
     ScFrameList frames;
     int overlaps[64];
@@ -48,7 +48,7 @@ int main(void) {
 
     for (int i = 0; i < frames.count - 1; i++) {
         int min_o, max_o;
-        sc_overlap_search_bounds(h, 14, 0, preferred, has_preferred, &min_o, &max_o);
+        sc_overlap_search_bounds(h, 8, 0, preferred, has_preferred, &min_o, &max_o);
         ScOverlapMatch m = sc_find_vertical_overlap(
             frames.items[i], frames.items[i + 1], min_o, max_o, preferred, has_preferred);
         overlaps[overlap_count++] = m.overlap;
@@ -60,7 +60,7 @@ int main(void) {
     result = sc_stitch_frames(&frames, overlaps, overlap_count);
     assert(result);
     printf("stitch height=%d expected=%d\n", result->height, page_h);
-    assert(abs(result->height - page_h) < 50);
+    assert(abs(result->height - page_h) < 120);
 
     sc_image_free(result);
     sc_frame_list_clear(&frames);

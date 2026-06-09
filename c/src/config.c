@@ -31,23 +31,23 @@ static int parse_double(const char *value, double *out) {
 
 void sc_config_print_help(const char *prog) {
     printf(
-        "Использование: %s [опции]\n\n"
-        "Опции:\n"
-        "  --region L,T,W,H         Область захвата\n"
-        "  -o, --output FILE        Выходной PNG\n"
-        "  --countdown N            Секунд до старта (по умолчанию 5)\n"
-        "  --wheel-notches N        Щелчков колёсика за шаг (по умолчанию 14)\n"
-        "  --micro-steps N          Микро-прокруток за шаг (по умолчанию 8)\n"
-        "  --micro-delay SEC        Пауза между микро-прокрутками (0.04)\n"
-        "  --no-focus-click         Не кликать при старте\n"
-        "  --focus-each-step        Кликать перед каждым шагом\n"
-        "  --scroll-delay SEC       Пауза после прокрутки (0.8)\n"
-        "  --settle-delay SEC       Пауза после скриншота (0.15)\n"
-        "  --max-frames N           Лимит кадров (300)\n"
-        "  --same-frame-threshold X Порог конца страницы (0.002)\n"
-        "  --expected-overlap N     Ожидаемое перекрытие в px (0=авто)\n"
-        "  --save-frames DIR        Папка для отладочных кадров\n"
-        "  -h, --help               Справка\n",
+        "Usage: %s [options]\n\n"
+        "Options:\n"
+        "  --region L,T,W,H         Capture region\n"
+        "  -o, --output FILE        Output PNG path\n"
+        "  --countdown N            Seconds before start (default 5)\n"
+        "  --wheel-notches N        Wheel notches per step (default 8)\n"
+        "  --micro-steps N          Micro-scroll steps per step (default 8)\n"
+        "  --micro-delay SEC        Delay between micro-scrolls (0.04)\n"
+        "  --no-focus-click         Skip initial focus click\n"
+        "  --focus-each-step        Click before each scroll step\n"
+        "  --scroll-delay SEC       Delay after scroll (0.8)\n"
+        "  --settle-delay SEC       Delay after screenshot (0.15)\n"
+        "  --max-frames N           Frame limit (300)\n"
+        "  --same-frame-threshold X End-of-page threshold (0.002)\n"
+        "  --expected-overlap N     Expected overlap px (0=auto)\n"
+        "  --save-frames DIR        Save debug frames to folder\n"
+        "  -h, --help               Show help\n",
         prog
     );
 }
@@ -61,7 +61,7 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
 
     memset(cfg, 0, sizeof(*cfg));
     cfg->countdown = 5;
-    cfg->wheel_notches = 14;
+    cfg->wheel_notches = 8;
     cfg->micro_steps = 8;
     cfg->micro_delay = 0.04;
     cfg->scroll_delay = 0.8;
@@ -76,7 +76,7 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
             return 0;
         } else if (strcmp(arg, "--region") == 0 && i + 1 < argc) {
             if (!parse_region(argv[++i], &cfg->region)) {
-                fprintf(stderr, "Неверный формат --region\n");
+                fprintf(stderr, "Invalid --region format (use left,top,width,height)\n");
                 return 0;
             }
             cfg->has_region = 1;
@@ -119,7 +119,7 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
             strncpy(cfg->save_frames_dir, argv[++i], sizeof(cfg->save_frames_dir) - 1);
             cfg->has_save_frames = 1;
         } else {
-            fprintf(stderr, "Неизвестный аргумент: %s\n", arg);
+            fprintf(stderr, "Unknown argument: %s\n", arg);
             return 0;
         }
     }
