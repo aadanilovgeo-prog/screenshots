@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+__version__ = "1.2.1"
+
 import argparse
 import ctypes
 import platform
@@ -29,6 +31,9 @@ pyautogui.PAUSE = 0.02
 WHEEL_DELTA = 120
 MOUSEEVENTF_WHEEL = 0x0800
 PX_PER_WHEEL_NOTCH = 35
+HEADER_SKIP_FRAC = 0.12
+SEAM_GOOD = 0.045
+SEAM_BAD = 0.075
 
 
 @dataclass
@@ -160,24 +165,77 @@ def overlap_search_bounds(
 ) -> tuple[int, int]:
     estimated_scroll = max(40, wheel_notches * PX_PER_WHEEL_NOTCH)
     if preferred_overlap is not None:
-        min_overlap = max(40, preferred_overlap - 30)
-        max_overlap = min(frame_height - 40, preferred_overlap + 30)
+        min_overlap = max(40, preferred_overlap - 22)
+        max_overlap = min(frame_height - 30, preferred_overlap + 18)
     elif expected_overlap > 0:
-        min_overlap = max(40, expected_overlap - 80)
-        max_overlap = min(frame_height - 40, expected_overlap + 80)
+        min_overlap = max(40, expected_overlap - 70)
+        max_overlap = min(frame_height - 30, expected_overlap + 35)
     else:
-        min_scroll = int(estimated_scroll * 0.75)
-        max_scroll = int(estimated_scroll * 1.25)
+        min_scroll = int(estimated_scroll * 0.82)
+        max_scroll = int(estimated_scroll * 1.08)
         min_overlap = max(40, frame_height - max_scroll)
-        max_overlap = min(frame_height - 40, frame_height - min_scroll)
+        max_overlap = min(frame_height - 30, frame_height - min_scroll)
     if min_overlap >= max_overlap:
         min_overlap, max_overlap = 40, frame_height - 40
     return min_overlap, max_overlap
 
 
-def _strip_ssd(gray_above: np.ndarray, gray_below: np.ndarray, overlap: int, x0: int, x1: int) -> float:
-    patch_above = gray_above[gray_above.shape[0] - overlap : gray_above.shape[0], x0:x1]
-    patch_below = gray_below[:overlap, x0:x1]
+
+
+def _seam_mean_diff(img_above: Image.Image, img_below: Image.Image, overlap: int) -> float:
+    import numpy as np
+    a = np.asarray(img_above, dtype=np.int16)
+    b = np.asarray(img_below, dtype=np.int16)
+    skip = int(overlap * HEADER_SKIP_FRAC)
+    if overlap - skip < 8:
+        skip = 0
+    region_a = a[a.shape[0] - overlap + skip : a.shape[0] : 2, :, :]
+    region_b = b[skip:overlap:2, :, :]
+    if region_a.size == 0:
+        return 1.0
+    return float(np.mean(np.abs(region_a - region_b)) / 255.0)
+
+
+def _refine_overlap_by_seam(
+    img_above: Image.Image,
+    img_below: Image.Image,
+    overlap: int,
+    min_overlap: int,
+    max_overlap: int,
+    expected_overlap: int,
+) -> int:
+    seam = _seam_mean_diff(img_above, img_below, overlap)
+    best = overlap
+    if seam <= SEAM_GOOD:
+        return overlap
+    for delta in range(2, 52, 2):
+        up = overlap + delta
+        if up <= max_overlap:
+            s = _seam_mean_diff(img_above, img_below, up)
+            if s < seam:
+                seam, best = s, up
+        if seam <= SEAM_GOOD:
+            return best
+    if seam > SEAM_BAD:
+        for delta in range(2, 32, 2):
+            down = overlap - delta
+            if down >= min_overlap:
+                s = _seam_mean_diff(img_above, img_below, down)
+                if s < seam:
+                    seam, best = s, down
+            if seam <= SEAM_GOOD:
+                return best
+        if min_overlap <= expected_overlap <= max_overlap:
+            s = _seam_mean_diff(img_above, img_below, expected_overlap)
+            if s < seam:
+                best = expected_overlap
+    if seam > SEAM_BAD:
+        print(f"  [warn] weak seam match ({seam:.3f}), overlap={best}px")
+    return best
+
+def _strip_ssd(gray_above: np.ndarray, gray_below: np.ndarray, overlap: int, x0: int, x1: int, skip_top: int = 0) -> float:
+    patch_above = gray_above[gray_above.shape[0] - overlap + skip_top : gray_above.shape[0], x0:x1]
+    patch_below = gray_below[skip_top:overlap, x0:x1]
     return float(np.mean(np.abs(patch_above - patch_below)))
 
 
@@ -194,9 +252,12 @@ def _overlap_cost(
     ha = gray_above.shape[0]
     w = gray_above.shape[1]
     s1, s2 = w // 4, w // 2
-    ssd = _strip_ssd(gray_above, gray_below, overlap, 0, s1)
-    ssd = max(ssd, _strip_ssd(gray_above, gray_below, overlap, s1, s2))
-    ssd = max(ssd, _strip_ssd(gray_above, gray_below, overlap, s2, w))
+    skip_top = max(6, int(ha * HEADER_SKIP_FRAC))
+    ssd = (
+        _strip_ssd(gray_above, gray_below, overlap, 0, s1, skip_top)
+        + _strip_ssd(gray_above, gray_below, overlap, s1, s2, skip_top)
+        + _strip_ssd(gray_above, gray_below, overlap, s2, w, skip_top)
+    ) / 3.0
 
     ncc_int = _ncc(prof_above[ha - overlap : ha], prof_below[:overlap])
     ncc_grad = _ncc(gprof_above[ha - overlap : ha], gprof_below[:overlap])
@@ -205,9 +266,9 @@ def _overlap_cost(
     cost += 0.04 * overlap
     if preferred_overlap is not None:
         if overlap > preferred_overlap:
-            cost += 0.35 * (overlap - preferred_overlap)
+            cost += 0.25 * (overlap - preferred_overlap)
         else:
-            cost += 0.08 * (preferred_overlap - overlap)
+            cost += 0.12 * (preferred_overlap - overlap)
     return cost
 
 
@@ -265,6 +326,8 @@ def find_vertical_overlap(
             best_cost = cost
             best_overlap = overlap
 
+    expected = preferred_overlap if preferred_overlap is not None else (min_overlap + max_overlap) // 2
+    best_overlap = _refine_overlap_by_seam(img_above, img_below, best_overlap, min_overlap, max_overlap, expected)
     return OverlapMatch(overlap=best_overlap, score=best_cost)
 
 
@@ -275,9 +338,12 @@ def stabilize_overlaps(overlaps: list[int], scores: list[float]) -> list[int]:
     median_overlap = int(np.median(overlaps))
     stabilized: list[int] = []
     for overlap, score in zip(overlaps, scores):
-        if abs(overlap - median_overlap) > 60:
-            fixed = median_overlap - 10
-            stabilized.append(fixed if fixed >= 40 else median_overlap)
+        if abs(overlap - median_overlap) > 50:
+            stabilized.append(median_overlap)
+        elif overlap > median_overlap + 20:
+            stabilized.append(median_overlap + 8)
+        elif overlap < median_overlap - 20:
+            stabilized.append(median_overlap - 8)
         else:
             stabilized.append(overlap)
 
@@ -555,6 +621,10 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
 
+    if "--version" in sys.argv or "-V" in sys.argv:
+        print(f"scroll_capture {__version__}")
+        return 0
+
     region = args.region or pick_region_interactive()
     scroll_method = resolve_scroll_method(args.scroll_method)
     scroll = ScrollSettings(
@@ -571,6 +641,7 @@ def main() -> int:
         estimated_scroll = max(40, args.wheel_notches * PX_PER_WHEEL_NOTCH)
         expected_overlap = max(region.height - estimated_scroll, region.height // 3)
 
+    print(f"scroll_capture v{__version__}")
     print(
         f"Область захвата: left={region.left}, top={region.top}, "
         f"width={region.width}, height={region.height}"

@@ -1,4 +1,5 @@
 #include "scroll_capture.h"
+#include "version.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,12 +49,13 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Note: full functionality is available on Windows only.\n");
 #endif
 
-    if (argc < 2) {
-        /* allow running without args */
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        printf("scroll_capture %s\n", SC_VERSION);
+        return 0;
     }
 
     if (!sc_config_parse(&cfg, argc, argv)) {
-        return cfg.countdown == 5 && cfg.wheel_notches == 14 ? 0 : 1;
+        return cfg.countdown == 5 && cfg.wheel_notches == 10 ? 0 : 1;
     }
 
     if (cfg.has_region) {
@@ -80,6 +82,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    printf("scroll_capture v%s\n", SC_VERSION);
     printf(
         "Capture region: left=%d, top=%d, width=%d, height=%d\n",
         region.left,

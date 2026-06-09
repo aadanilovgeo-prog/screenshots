@@ -36,8 +36,8 @@ void sc_config_print_help(const char *prog) {
         "  --region L,T,W,H         Capture region\n"
         "  -o, --output FILE        Output PNG path\n"
         "  --countdown N            Seconds before start (default 5)\n"
-        "  --wheel-notches N        Wheel notches per step (default 8)\n"
-        "  --micro-steps N          Micro-scroll steps per step (default 8)\n"
+        "  --wheel-notches N        Wheel notches per step (default 10)\n"
+        "  --micro-steps N          Micro-scroll steps per step (default 10)\n"
         "  --micro-delay SEC        Delay between micro-scrolls (0.04)\n"
         "  --no-focus-click         Skip initial focus click\n"
         "  --focus-each-step        Click before each scroll step\n"
@@ -61,7 +61,7 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv) {
 
     memset(cfg, 0, sizeof(*cfg));
     cfg->countdown = 5;
-    cfg->wheel_notches = 8;
+    cfg->wheel_notches = 10;
     cfg->micro_steps = 8;
     cfg->micro_delay = 0.04;
     cfg->scroll_delay = 0.8;

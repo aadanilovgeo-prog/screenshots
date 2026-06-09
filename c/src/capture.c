@@ -4,6 +4,47 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int capture_when_stable(const ScRegion *region, ScImage *out) {
+    ScImage *a;
+    ScImage *b;
+    size_t bytes;
+    int attempt;
+
+    a = sc_image_create(region->width, region->height);
+    b = sc_image_create(region->width, region->height);
+    if (!a || !b) {
+        sc_image_free(a);
+        sc_image_free(b);
+        return sc_capture_region(region, out);
+    }
+
+    bytes = (size_t)region->width * (size_t)region->height * 3u;
+    if (!sc_capture_region(region, b)) {
+        sc_image_free(a);
+        sc_image_free(b);
+        return 0;
+    }
+
+    for (attempt = 0; attempt < 6; attempt++) {
+        sc_sleep_ms(120);
+        if (!sc_capture_region(region, a)) {
+            break;
+        }
+        if (sc_image_diff_ratio(a, b) < 0.004) {
+            memcpy(out->rgb, a->rgb, bytes);
+            sc_image_free(a);
+            sc_image_free(b);
+            return 1;
+        }
+        memcpy(b->rgb, a->rgb, bytes);
+    }
+
+    memcpy(out->rgb, a->rgb, bytes);
+    sc_image_free(a);
+    sc_image_free(b);
+    return 1;
+}
+
 int sc_capture_long_page(
     const ScRegion *region,
     const ScScrollSettings *scroll,
@@ -43,7 +84,7 @@ int sc_capture_long_page(
     if (!previous) {
         return 0;
     }
-    if (!sc_capture_region(region, previous)) {
+    if (!capture_when_stable(region, previous)) {
         sc_image_free(previous);
         return 0;
     }
@@ -73,7 +114,7 @@ int sc_capture_long_page(
         if (!current) {
             return 0;
         }
-        if (!sc_capture_region(region, current)) {
+        if (!capture_when_stable(region, current)) {
             sc_image_free(current);
             return 0;
         }
@@ -103,6 +144,7 @@ int sc_capture_long_page(
         overlaps[*overlap_count] = match.overlap;
         (*overlap_count)++;
 
+        seam = 0.0;
         printf(
             "  Frame %04d: diff %.2f%%, overlap %dpx\n",
             index,
