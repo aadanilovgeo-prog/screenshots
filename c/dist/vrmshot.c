@@ -10,7 +10,7 @@
  *  - Сохранение результата в PNG.
  *
  * Сборка (MinGW-w64):
- *   gcc -O2 -o vrmshot_v4.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
+ *   gcc -O2 -o vrmshot_v5.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
  * Примечание: динамическая линковка обычно даёт меньше ложных AV-срабатываний,
  * чем полностью статический бинарник.
  *
@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdarg.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -38,14 +39,64 @@
 #define END_REPEAT_LIMIT   3      /* сколько кадров без прогресса подряд = конец страницы */
 #define MIN_MATCH_ROWS     8      /* минимально осмысленное число строк перекрытия */
 #define CONF_MIN           0.06   /* мин. уверенность матча; ниже — доверяем ожидаемому шагу */
-#define SHIFT_WINDOW_FRAC  0.28   /* поиск сдвига только вокруг ожидаемого шага (±28%) */
-#define NO_PROGRESS_DIFF   2.5   /* порог "нет нового контента" по нижней полосе кадра */
+#define SHIFT_WINDOW_FRAC       0.28  /* поиск сдвига вокруг ожидаемого шага (±28%) */
+#define SHIFT_WINDOW_FRAC_TIGHT 0.15  /* суженное окно после плохих швов */
+#define SHIFT_WINDOW_BAD_LIMIT  2     /* подряд плохих швов до сужения окна */
+#define NO_PROGRESS_DIFF        2.5   /* порог "нет нового контента" */
+#define SEAM_MAX_DIFF           4.0   /* макс. допустимое расхождение на шве overlap */
+#define SAME_FRAME_DIFF         2.0   /* кадр почти не изменился после скролла */
+#define MAX_CANVAS_HEIGHT       600000
+#define STABLE_ATTEMPTS         3
+#define STABLE_INTERVAL_MS      150
+#define STABLE_MAX_DIFF         2.0
+#define MICRO_NOTCH_DELAY_MS    60
+#define FOCUS_DELAY_MS          100
+#define ROW_PROFILE_MARGIN_FRAC 0.14
+#define LOG_FILE_NAME           "vrmshot_log.txt"
+
+static FILE *g_log = NULL;
+static int g_bad_seam_streak = 0;
+
+static void log_open(void) {
+    g_log = fopen(LOG_FILE_NAME, "w");
+    if (g_log) {
+        fprintf(g_log, "vrmshot log\n");
+        fflush(g_log);
+    }
+}
+
+static void log_close(void) {
+    if (g_log) {
+        fclose(g_log);
+        g_log = NULL;
+    }
+}
+
+static void log_msg(const char *fmt, ...) {
+    va_list ap;
+    if (!g_log) {
+        return;
+    }
+    va_start(ap, fmt);
+    vfprintf(g_log, fmt, ap);
+    va_end(ap);
+    fflush(g_log);
+}
+
+static double current_shift_window_frac(void) {
+    if (g_bad_seam_streak >= SHIFT_WINDOW_BAD_LIMIT) {
+        return SHIFT_WINDOW_FRAC_TIGHT;
+    }
+    return SHIFT_WINDOW_FRAC;
+}
 
 /* ----------------------- Структура кадра ----------------------- */
 typedef struct {
     int w, h;
     unsigned char *px; /* RGB, 3 байта на пиксель, row-major */
 } Frame;
+
+static double strip_mean_diff(const Frame *a, int a_row, const Frame *b, int b_row, int rows);
 
 static void frame_free(Frame *f) {
     if (f && f->px) { free(f->px); f->px = NULL; }
@@ -108,6 +159,47 @@ fail:
     return 0;
 }
 
+static int capture_region_stable(int x, int y, int w, int h, Frame *out) {
+    Frame a;
+    Frame b;
+    int attempt;
+    int check_rows;
+    double diff;
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    if (!capture_region(x, y, w, h, &b)) {
+        return 0;
+    }
+
+    check_rows = h / 6;
+    if (check_rows < 12) {
+        check_rows = 12;
+    }
+    if (check_rows > 48) {
+        check_rows = 48;
+    }
+
+    for (attempt = 0; attempt < STABLE_ATTEMPTS; attempt++) {
+        Sleep(STABLE_INTERVAL_MS);
+        if (!capture_region(x, y, w, h, &a)) {
+            break;
+        }
+        diff = strip_mean_diff(&b, b.h / 3, &a, a.h / 3, check_rows);
+        if (diff < STABLE_MAX_DIFF) {
+            frame_free(&b);
+            *out = a;
+            return 1;
+        }
+        frame_free(&b);
+        b = a;
+        a.px = NULL;
+    }
+
+    *out = b;
+    return 1;
+}
+
 /* ----------------------- Сигнатура строки (среднее по каналам) ----------------------- */
 /* Для скорости сравниваем не пиксели целиком, а профиль строки:
  * для каждой строки считаем массив интенсивностей по столбцам (с шагом),
@@ -115,11 +207,31 @@ fail:
 
 static void row_profile(const Frame *f, int row, int *prof, int step, int ncols) {
     const unsigned char *p = f->px + (size_t)row * f->w * 3;
-    for (int i = 0; i < ncols; i++) {
-        int c = i * step;
-        if (c >= f->w) c = f->w - 1;
-        const unsigned char *q = p + (size_t)c * 3;
-        prof[i] = (q[0] + q[1] + q[2]) / 3;
+    int margin = (int)(f->w * ROW_PROFILE_MARGIN_FRAC);
+    int x0 = margin;
+    int x1 = f->w - margin;
+    int usable = x1 - x0;
+    int i;
+
+    if (usable < 8) {
+        x0 = 0;
+        x1 = f->w;
+        usable = f->w;
+    }
+
+    for (i = 0; i < ncols; i++) {
+        int c = x0 + (i * usable) / (ncols > 1 ? (ncols - 1) : 1);
+        if (c >= f->w) {
+            c = f->w - 1;
+        }
+        if (c < 0) {
+            c = 0;
+        }
+        {
+            const unsigned char *q = p + (size_t)c * 3;
+            prof[i] = (q[0] + q[1] + q[2]) / 3;
+        }
+        (void)step;
     }
 }
 
@@ -149,7 +261,37 @@ static int match_band_rows(const Frame *f) {
     return band;
 }
 
-/* Оценка совпадения: верх cur совпадает с prev, начиная со строки d. */
+static double shift_match_band_score(
+    const Frame *prev,
+    const Frame *cur,
+    int prev_start,
+    int cur_start,
+    int band,
+    int step,
+    int ncols,
+    int *tmpl,
+    int *line
+) {
+    long acc = 0;
+    int r;
+
+    if (prev_start < 0 || cur_start < 0 || prev_start + band > prev->h || cur_start + band > cur->h) {
+        return 1e18;
+    }
+
+    for (r = 0; r < band; r++) {
+        row_profile(cur, cur_start + r, tmpl + (size_t)r * ncols, step, ncols);
+    }
+    for (r = 0; r < band; r++) {
+        row_profile(prev, prev_start + r, line, step, ncols);
+        acc += row_diff(tmpl + (size_t)r * ncols, line, ncols);
+    }
+
+    return (double)acc / (double)(band * ncols);
+    (void)step;
+}
+
+/* Оценка совпадения: верх cur совпадает с prev, начиная со строки d (два band-шаблона). */
 static double shift_match_score(
     const Frame *prev,
     const Frame *cur,
@@ -160,24 +302,19 @@ static double shift_match_score(
     int *tmpl,
     int *line
 ) {
-    long acc = 0;
-    int y;
+    double s1;
+    double s2;
 
     if (d < 1 || d + band > prev->h) {
         return 1e18;
     }
 
-    for (int r = 0; r < band; r++) {
-        row_profile(cur, r, tmpl + (size_t)r * ncols, step, ncols);
+    s1 = shift_match_band_score(prev, cur, d, 0, band, step, ncols, tmpl, line);
+    if (band * 2 <= cur->h && d + band * 2 <= prev->h) {
+        s2 = shift_match_band_score(prev, cur, d + band, band, band, step, ncols, tmpl, line);
+        return (s1 + s2) * 0.5;
     }
-
-    y = d;
-    for (int r = 0; r < band; r++) {
-        row_profile(prev, y + r, line, step, ncols);
-        acc += row_diff(tmpl + (size_t)r * ncols, line, ncols);
-    }
-
-    return (double)acc / (double)(band * ncols);
+    return s1;
 }
 
 /* Средняя разница между двумя полосами строк одного кадра. */
@@ -254,8 +391,11 @@ static int find_shift(const Frame *prev, const Frame *cur, int hint, double *con
         return -1;
     }
 
-    lo = hint - (int)(hint * SHIFT_WINDOW_FRAC);
-    hi_win = hint + (int)(hint * SHIFT_WINDOW_FRAC);
+    {
+        double window_frac = current_shift_window_frac();
+        lo = hint - (int)(hint * window_frac);
+        hi_win = hint + (int)(hint * window_frac);
+    }
     if (lo < 1) lo = 1;
     if (hi_win > hi) hi_win = hi;
 
@@ -311,17 +451,66 @@ static int find_shift(const Frame *prev, const Frame *cur, int hint, double *con
     return best_d;
 }
 
-/* ----------------------- Прокрутка колёсиком в точке ----------------------- */
-static void scroll_wheel(int cx, int cy, int notches) {
-    INPUT in;
+static void focus_point(int cx, int cy) {
+    INPUT in[2];
 
     SetCursorPos(cx, cy);
     Sleep(20);
-    memset(&in, 0, sizeof(in));
-    in.type = INPUT_MOUSE;
-    in.mi.dwFlags = MOUSEEVENTF_WHEEL;
-    in.mi.mouseData = (DWORD)(notches * -WHEEL_DELTA); /* 120 на одну "ступеньку" */
-    SendInput(1, &in, sizeof(in));
+    memset(in, 0, sizeof(in));
+    in[0].type = INPUT_MOUSE;
+    in[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    in[1].type = INPUT_MOUSE;
+    in[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    SendInput(2, in, sizeof(INPUT));
+    Sleep(FOCUS_DELAY_MS);
+}
+
+/* Прокрутка по одной "ступеньке" за раз — меньше перелётов. */
+static void scroll_wheel(int cx, int cy, int notches) {
+    int i;
+
+    focus_point(cx, cy);
+    for (i = 0; i < notches; i++) {
+        INPUT in;
+        memset(&in, 0, sizeof(in));
+        in.type = INPUT_MOUSE;
+        in.mi.dwFlags = MOUSEEVENTF_WHEEL;
+        in.mi.mouseData = (DWORD)(-WHEEL_DELTA);
+        SendInput(1, &in, sizeof(in));
+        if (i + 1 < notches) {
+            Sleep(MICRO_NOTCH_DELAY_MS);
+        }
+    }
+}
+
+static double frame_quick_diff(const Frame *a, const Frame *b) {
+    int rows = 16;
+    double d1;
+    double d2;
+    double d3;
+
+    if (!a || !b || a->h < rows * 3 || b->h < rows * 3) {
+        return 1e18;
+    }
+
+    d1 = strip_mean_diff(a, a->h / 4, b, b->h / 4, rows);
+    d2 = strip_mean_diff(a, a->h / 2 - rows / 2, b, b->h / 2 - rows / 2, rows);
+    d3 = strip_mean_diff(a, (3 * a->h) / 4 - rows, b, (3 * b->h) / 4 - rows, rows);
+    return (d1 + d2 + d3) / 3.0;
+}
+
+static double seam_overlap_diff(const Frame *prev, const Frame *cur, int d) {
+    int overlap = prev->h - d;
+    int check;
+
+    if (overlap < MIN_MATCH_ROWS) {
+        return 1e18;
+    }
+    check = overlap;
+    if (check > 48) {
+        check = 48;
+    }
+    return strip_mean_diff(prev, prev->h - check, cur, 0, check);
 }
 
 /* ----------------------- Оверлей для выбора области ----------------------- */
@@ -467,6 +656,10 @@ static double canvas_new_strip_diff(const Canvas *canvas, const Frame *cur, int 
 static int canvas_append(Canvas *c, const unsigned char *src, int w, int rows, int src_row_start) {
     if (c->w == 0) c->w = w;
     if (w != c->w) return 0;
+    if (c->h + rows > MAX_CANVAS_HEIGHT) {
+        log_msg("Canvas height limit reached (%d + %d > %d)\n", c->h, rows, MAX_CANVAS_HEIGHT);
+        return 0;
+    }
     long need = (long)(c->h + rows) * c->w * 3;
     if (need > c->cap) {
         long ncap = need * 2;
@@ -485,6 +678,7 @@ static int canvas_append(Canvas *c, const unsigned char *src, int w, int rows, i
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
     (void)hI;(void)hP;(void)lpCmd;(void)nShow;
 
+    int memory_limit_hit = 0;
     RECT r;
     if (!select_region(&r)) {
         MessageBoxA(NULL, "Выделение отменено или область слишком мала.", "vrmshot", MB_OK);
@@ -495,10 +689,14 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
     int w = r.right - r.left;
     int h = r.bottom - r.top;
 
+    log_open();
+
     /* дать оверлею исчезнуть и пользователю отвести курсор */
     Sleep(400);
 
     int cx = x + w/2, cy = y + h/2;
+    focus_point(cx, cy);
+    log_msg("Region: %d,%d %dx%d target_scroll~%dpx\n", x, y, w, h, (int)(h * (1.0 - OVERLAP_RATIO)));
 
     /* Адаптивный шаг прокрутки.
      * ВАЖНО (доказано тестами): прокрутка должна оставлять БОЛЬШОЕ гарантированное
@@ -522,8 +720,9 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
     Canvas canvas; memset(&canvas, 0, sizeof(canvas));
 
     Frame prev; memset(&prev, 0, sizeof(prev));
-    if (!capture_region(x, y, w, h, &prev)) {
+    if (!capture_region_stable(x, y, w, h, &prev)) {
         MessageBoxA(NULL, "Не удалось захватить экран.", "vrmshot", MB_OK);
+        log_close();
         return 1;
     }
     /* первый кадр кладём целиком */
@@ -537,17 +736,40 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
         Sleep(WHEEL_SETTLE_MS);
 
         Frame cur; memset(&cur, 0, sizeof(cur));
-        if (!capture_region(x, y, w, h, &cur)) break;
-
-        /* ищем величину прокрутки d (новые строки внизу cur) */
         double conf;
+        double quick_diff;
+        double bottom_diff;
+        double tail_diff;
+        double seam_diff;
         int d;
         int trust;
         int check_rows;
-        double bottom_diff;
-        double tail_diff;
         int no_progress;
         int hit_bottom;
+        int new_rows;
+        int seam_ok;
+
+        if (!capture_region_stable(x, y, w, h, &cur)) {
+            break;
+        }
+
+        quick_diff = frame_quick_diff(&prev, &cur);
+        if (quick_diff < SAME_FRAME_DIFF) {
+            log_msg(
+                "frame=%d no movement quick_diff=%.2f end_repeat=%d\n",
+                frames,
+                quick_diff,
+                end_repeat + 1
+            );
+            end_repeat++;
+            frame_free(&cur);
+            if (end_repeat >= END_REPEAT_LIMIT) {
+                log_msg("End of page: frame unchanged after scroll.\n");
+                break;
+            }
+            notches += 1;
+            continue;
+        }
 
         d = find_shift(&prev, &cur, target_d, &conf);
         trust = (conf >= CONF_MIN && d >= 1);
@@ -557,32 +779,56 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
         if (d > h) d = h;
         if (d < 1) d = 1;
 
+        seam_diff = seam_overlap_diff(&prev, &cur, d);
+        seam_ok = (seam_diff <= SEAM_MAX_DIFF);
+        if (!seam_ok) {
+            log_msg(
+                "frame=%d bad seam diff=%.2f for d=%d, fallback to target_d=%d\n",
+                frames,
+                seam_diff,
+                d,
+                target_d
+            );
+            g_bad_seam_streak++;
+            d = target_d;
+            seam_diff = seam_overlap_diff(&prev, &cur, d);
+            seam_ok = (seam_diff <= SEAM_MAX_DIFF);
+        } else {
+            g_bad_seam_streak = 0;
+        }
+
         check_rows = d;
         if (check_rows > 48) check_rows = 48;
         if (check_rows < 8) check_rows = 8;
 
         bottom_diff = strip_mean_diff(&prev, prev.h - check_rows, &cur, cur.h - check_rows, check_rows);
         tail_diff = canvas_new_strip_diff(&canvas, &cur, d);
-        no_progress = (bottom_diff < NO_PROGRESS_DIFF) || (tail_diff < NO_PROGRESS_DIFF);
+        no_progress = (bottom_diff < NO_PROGRESS_DIFF) && (tail_diff < NO_PROGRESS_DIFF);
 
-        printf(
-            "  frame=%d shift=%dpx conf=%.3f bottom_diff=%.2f tail_diff=%.2f\n",
+        log_msg(
+            "frame=%d shift=%dpx conf=%.3f seam=%.2f bottom=%.2f tail=%.2f window=%.2f\n",
             frames,
             d,
             conf,
+            seam_diff,
             bottom_diff,
-            tail_diff
+            tail_diff,
+            current_shift_window_frac()
         );
 
         hit_bottom = (trust && d <= 4);
         if (no_progress || hit_bottom) {
             if (hit_bottom && !no_progress && d >= 1 && d <= h) {
-                canvas_append(&canvas, cur.px, cur.w, d, h - d);
+                if (!canvas_append(&canvas, cur.px, cur.w, d, h - d)) {
+                    memory_limit_hit = 1;
+                    frame_free(&cur);
+                    break;
+                }
             }
             end_repeat++;
             frame_free(&cur);
             if (end_repeat >= END_REPEAT_LIMIT) {
-                printf("  End of page: no further progress.\n");
+                log_msg("End of page: no further progress.\n");
                 break;
             }
             notches += 1;
@@ -590,32 +836,32 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
         }
         end_repeat = 0;
 
-        int new_rows = d;
+        new_rows = d;
 
-        /* Калибровка колеса: фактически прокрутилось d пикселей за notches ступенек.
-         * Обновляем оценку px_per_notch (сглаженно) и пересчитываем notches так,
-         * чтобы следующий шаг попадал в target_scroll. */
-        if (d > 4 && notches > 0) {
+        if (d > 4 && notches > 0 && trust && seam_ok) {
             int measured = d / notches;
             if (measured > 2) {
                 px_per_notch = (px_per_notch * 2 + measured) / 3;
                 if (px_per_notch < 1) px_per_notch = 1;
-                int nn = target_scroll / px_per_notch;
-                if (nn < 1) nn = 1;
-                notches = nn;
+                {
+                    int nn = target_scroll / px_per_notch;
+                    if (nn < 1) nn = 1;
+                    notches = nn;
+                }
             }
+            target_d = (target_d * 3 + d) / 4;
+            if (target_d > target_scroll) target_d = target_scroll;
+            if (target_d < 8) target_d = 8;
         }
-        /* сглаженно обновляем подсказку ожидаемого сдвига; но не выше запрошенного
-         * шага, чтобы единичный сбой не "разгонял" подсказку и не ломал склейку */
-        target_d = (target_d * 3 + d) / 4;
-        if (target_d > target_scroll) target_d = target_scroll;
-        if (target_d < 8) target_d = 8;
 
-        /* добавляем только новые строки внизу нового кадра: cur[h-d .. h] */
-        canvas_append(&canvas, cur.px, cur.w, new_rows, h - new_rows);
+        if (!canvas_append(&canvas, cur.px, cur.w, new_rows, h - new_rows)) {
+            memory_limit_hit = 1;
+            frame_free(&cur);
+            break;
+        }
 
         frame_free(&prev);
-        prev = cur; /* передаём владение */
+        prev = cur;
     }
 
     frame_free(&prev);
@@ -642,11 +888,17 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
     if (ok) {
         sprintf(msg, "Готово!\nКадров: %d\nИтог: %d x %d px\nФайл: %s",
                 frames, canvas.w, canvas.h, fname);
+        if (memory_limit_hit) {
+            strcat(msg, "\n\nПредупреждение: достигнут лимит высоты, сохранена часть страницы.");
+        }
+        log_msg("Done: %s (%d x %d px, frames=%d)\n", fname, canvas.w, canvas.h, frames);
     } else {
         sprintf(msg, "Ошибка записи PNG.");
+        log_msg("PNG write failed.\n");
     }
     MessageBoxA(NULL, msg, "vrmshot", MB_OK);
 
     free(canvas.px);
+    log_close();
     return ok ? 0 : 1;
 }
