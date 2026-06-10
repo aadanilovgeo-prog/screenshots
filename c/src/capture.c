@@ -39,6 +39,7 @@ static int stall_tracker_should_stop(
     int high_dup;
     int thin_overlap;
     int bottom_bounce;
+    int rubber_band;
 
     if (!tracker || !shift || !crop) {
         return 0;
