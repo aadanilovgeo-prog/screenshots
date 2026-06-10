@@ -35,6 +35,7 @@ int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
     ScImage *b;
     size_t bytes;
     int attempt;
+    int have_stable = 0;
 
     if (!region || !out) {
         return 0;
@@ -67,15 +68,21 @@ int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
             }
             if (sc_image_diff_ratio(a, b) < SC_STABLE_DIFF) {
                 memcpy(out->rgb, a->rgb, bytes);
-                sc_image_free(a);
-                sc_image_free(b);
-                return 1;
+                have_stable = 1;
+                break;
             }
         }
         memcpy(b->rgb, a->rgb, bytes);
     }
 
-    memcpy(out->rgb, a->rgb, bytes);
+    if (!have_stable) {
+        if (!sc_capture_region(region, out)) {
+            sc_image_free(a);
+            sc_image_free(b);
+            return 0;
+        }
+    }
+
     sc_image_free(a);
     sc_image_free(b);
     return 1;
@@ -178,6 +185,44 @@ static int adaptive_scroll_to_target(
     return 0;
 }
 
+static int stitch_append_frame(
+    ScImage **stitched,
+    const ScImage *frame,
+    int crop,
+    int frame_index
+) {
+    ScImage *next;
+    int new_h;
+
+    if (!stitched || !*stitched || !frame) {
+        return 0;
+    }
+
+    new_h = (*stitched)->height - crop + frame->height;
+    if (new_h < frame->height) {
+        new_h = frame->height;
+    }
+    if (!sc_image_size_ok(frame->width, new_h)) {
+        fprintf(
+            stderr,
+            "Output image would exceed memory limit at frame %d (height ~%d px).\n",
+            frame_index,
+            new_h
+        );
+        return 0;
+    }
+
+    next = sc_append_frame_safely(*stitched, frame, crop);
+    if (!next) {
+        fprintf(stderr, "Out of memory stitching frame %d.\n", frame_index);
+        return 0;
+    }
+
+    sc_image_free(*stitched);
+    *stitched = next;
+    return 1;
+}
+
 int sc_capture_long_page(
     const ScRegion *region,
     const ScScrollSettings *scroll,
@@ -186,24 +231,25 @@ int sc_capture_long_page(
     double same_frame_threshold,
     int safe_stitch,
     const char *save_frames_dir,
-    ScFrameList *frames,
-    int *crops,
-    int *crop_count,
+    ScImage **out_result,
+    int *frames_captured,
     int *reached_end,
     ScStitchLog *log
 ) {
     ScImage *previous = NULL;
     ScImage *current = NULL;
+    ScImage *stitched = NULL;
     int index;
-    int overlap_capacity = max_frames;
+    int captured = 0;
     char frame_path[600];
     char preview_path[600];
 
-    if (!region || !scroll || !frames || !crops || !crop_count || !reached_end) {
+    if (!region || !scroll || !out_result || !frames_captured || !reached_end) {
         return 0;
     }
 
-    *crop_count = 0;
+    *out_result = NULL;
+    *frames_captured = 0;
     *reached_end = 0;
 
     if (scroll->focus_click) {
@@ -214,6 +260,7 @@ int sc_capture_long_page(
 
     previous = sc_image_create(region->width, region->height);
     if (!previous) {
+        fprintf(stderr, "Out of memory for first frame.\n");
         return 0;
     }
     if (!sc_wait_for_frame_stable(region, previous)) {
@@ -221,10 +268,13 @@ int sc_capture_long_page(
         return 0;
     }
 
-    if (!sc_frame_list_push(frames, previous)) {
+    stitched = sc_image_copy(previous);
+    if (!stitched) {
+        fprintf(stderr, "Out of memory for stitched image.\n");
         sc_image_free(previous);
         return 0;
     }
+    captured = 1;
 
     if (save_frames_dir) {
         snprintf(frame_path, sizeof(frame_path), "%s/frame_0000.png", save_frames_dir);
@@ -246,7 +296,8 @@ int sc_capture_long_page(
 
         current = sc_image_create(region->width, region->height);
         if (!current) {
-            return 0;
+            fprintf(stderr, "Out of memory for frame %d.\n", index);
+            break;
         }
 
         scroll_result = adaptive_scroll_to_target(
@@ -266,7 +317,7 @@ int sc_capture_long_page(
         }
         if (scroll_result == 0) {
             sc_image_free(current);
-            return 0;
+            break;
         }
 
         {
@@ -276,13 +327,13 @@ int sc_capture_long_page(
             sc_sleep_ms((int)(settle_delay * 1000.0));
             if (!sc_wait_for_frame_stable(region, current)) {
                 sc_image_free(current);
-                return 0;
+                break;
             }
 
             if (!sc_detect_vertical_content_shift(previous, current, &shift)) {
                 fprintf(stderr, "Failed to detect content shift for frame %d.\n", index);
                 sc_image_free(current);
-                return 0;
+                break;
             }
 
             shift.micro_steps_used = saved_micro;
@@ -294,10 +345,12 @@ int sc_capture_long_page(
         }
 
         safe_crop = sc_choose_safe_crop(previous, current, &shift, safe_stitch);
-        crops[*crop_count] = safe_crop.crop;
-        (*crop_count)++;
-
         sc_stitch_log_frame(log, index, &shift, &safe_crop, 0);
+
+        if (!stitch_append_frame(&stitched, current, safe_crop.crop, index)) {
+            sc_image_free(current);
+            break;
+        }
 
         if (save_frames_dir) {
             snprintf(frame_path, sizeof(frame_path), "%s/frame_%04d.png", save_frames_dir, index);
@@ -306,17 +359,27 @@ int sc_capture_long_page(
             sc_save_seam_preview(preview_path, previous, current, safe_crop.crop);
         }
 
-        if (!sc_frame_list_push(frames, current)) {
-            sc_image_free(current);
-            return 0;
-        }
-
+        sc_image_free(previous);
         previous = current;
+        current = NULL;
+        captured++;
 
-        if (*crop_count >= overlap_capacity) {
+        printf("  Stitched height: %d px (%d frame(s))\n", stitched->height, captured);
+
+        if (captured >= max_frames) {
             break;
         }
     }
 
+    sc_image_free(previous);
+    sc_image_free(current);
+
+    if (!stitched || captured < 1) {
+        sc_image_free(stitched);
+        return 0;
+    }
+
+    *out_result = stitched;
+    *frames_captured = captured;
     return 1;
 }

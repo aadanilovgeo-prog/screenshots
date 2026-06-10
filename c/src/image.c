@@ -1,13 +1,25 @@
 #include "scroll_capture.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+int sc_image_size_ok(int width, int height) {
+    size_t bytes;
+
+    if (width <= 0 || height <= 0 || height > SC_MAX_OUTPUT_HEIGHT) {
+        return 0;
+    }
+
+    bytes = (size_t)width * (size_t)height * 3u;
+    return bytes <= SC_MAX_IMAGE_BYTES;
+}
 
 ScImage *sc_image_create(int width, int height) {
     ScImage *img;
     size_t bytes;
 
-    if (width <= 0 || height <= 0) {
+    if (!sc_image_size_ok(width, height)) {
         return NULL;
     }
 

@@ -690,6 +690,7 @@ void sc_stitch_log_init(ScStitchLog *log, const char *debug_dir) {
     }
 
     strncpy(log->debug_dir, debug_dir, sizeof(log->debug_dir) - 1);
+    log->debug_dir[sizeof(log->debug_dir) - 1] = '\0';
     log->has_debug_dir = 1;
     sc_mkdir_p(debug_dir);
 

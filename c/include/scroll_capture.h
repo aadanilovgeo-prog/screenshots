@@ -16,6 +16,8 @@
 #define SC_NOTCHES_PER_STEP_SMALL 3
 #define SC_MAX_MICRO_STEPS 80
 #define SC_MICRO_DELAY_SEC 0.05
+#define SC_MAX_OUTPUT_HEIGHT 400000
+#define SC_MAX_IMAGE_BYTES ((size_t)800 * 1024 * 1024)
 
 typedef struct {
     int left;
@@ -97,6 +99,7 @@ int sc_config_parse(ScConfig *cfg, int argc, char **argv);
 void sc_config_print_help(const char *prog);
 
 ScImage *sc_image_create(int width, int height);
+int sc_image_size_ok(int width, int height);
 void sc_image_free(ScImage *img);
 ScImage *sc_image_copy(const ScImage *src);
 ScImage *sc_image_append_crop(const ScImage *result, const ScImage *frame, int top_crop);
@@ -163,9 +166,8 @@ int sc_capture_long_page(
     double same_frame_threshold,
     int safe_stitch,
     const char *save_frames_dir,
-    ScFrameList *frames,
-    int *crops,
-    int *crop_count,
+    ScImage **out_result,
+    int *frames_captured,
     int *reached_end,
     ScStitchLog *log
 );
