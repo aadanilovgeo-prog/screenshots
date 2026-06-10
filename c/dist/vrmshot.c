@@ -10,7 +10,7 @@
  *  - Сохранение результата в PNG.
  *
  * Сборка (MinGW-w64):
- *   gcc -O2 -o vrmshot_v7.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
+ *   gcc -O2 -o vrmshot_v8.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
  * Примечание: динамическая линковка обычно даёт меньше ложных AV-срабатываний,
  * чем полностью статический бинарник.
  *
@@ -45,6 +45,8 @@
 #define NO_PROGRESS_DIFF        2.5   /* порог "нет нового контента" */
 #define SEAM_MAX_DIFF           4.0   /* макс. допустимое расхождение на шве overlap */
 #define SEAM_GOOD               2.8   /* хороший шов — можно доверять сдвигу */
+#define BAD_SEAM_STREAK_LIMIT   8     /* подряд кадров без валидного шва = стоп */
+#define DUPLICATE_TAIL_DIFF     18.0  /* хвост canvas похож на cur = дубль */
 #define MAX_SHIFT_OVER_FRAC     0.06  /* макс. перелёт относительно target_d (+6%) */
 #define CONF_HIGH               0.14  /* высокая уверенность для увеличения d */
 #define SAME_FRAME_DIFF         2.0   /* кадр почти не изменился после скролла */
@@ -518,89 +520,68 @@ static double seam_overlap_diff(const Frame *prev, const Frame *cur, int d) {
     return strip_mean_diff(prev, prev->h - check, cur, 0, check);
 }
 
-/* Консервативный выбор d: при сомнении лучше дубль, чем пропуск секции. */
-static int finalize_shift(
+/* Выбор d по качеству шва: максимальный сдвиг с приемлемым overlap.
+ * Сканируем сверху вниз — предпочитаем больший d (больше нового контента).
+ * Возвращает -1, если нет d с seam <= SEAM_MAX_DIFF. */
+static int find_shift_by_seam(
     const Frame *prev,
     const Frame *cur,
     int found_d,
     int target_d,
-    double conf,
     double *seam_out
 ) {
     int cap;
     int floor_d;
     int d;
-    int best_d;
-    double best_seam;
     double seam;
+    int accept_d = -1;
+    double accept_seam = 1e18;
 
-    if (!seam_out || target_d < 1) {
-        return target_d;
-    }
-
-    if (found_d < 1) {
-        found_d = target_d;
-    }
-    if (found_d > cur->h) {
-        found_d = cur->h;
+    if (!seam_out || !prev || !cur || target_d < 1) {
+        return -1;
     }
 
-    cap = target_d + (int)(target_d * MAX_SHIFT_OVER_FRAC);
-    if (cap > found_d) {
-        cap = found_d;
+    cap = found_d;
+    if (cap < 1) {
+        cap = target_d;
     }
-    floor_d = target_d - target_d / 12;
-    if (floor_d < 8) {
-        floor_d = 8;
+    cap += (int)(target_d * MAX_SHIFT_OVER_FRAC);
+    if (cap > cur->h) {
+        cap = cur->h;
+    }
+    if (cap > prev->h - MIN_MATCH_ROWS) {
+        cap = prev->h - MIN_MATCH_ROWS;
+    }
+    if (cap < 1) {
+        return -1;
     }
 
-    best_d = target_d;
-    best_seam = seam_overlap_diff(prev, cur, target_d);
-    if (best_seam <= SEAM_GOOD) {
-        *seam_out = best_seam;
-        return target_d;
+    floor_d = 8;
+    if (floor_d > cap) {
+        floor_d = cap;
     }
 
-    for (d = target_d - 1; d >= floor_d; d--) {
+    for (d = cap; d >= floor_d; d--) {
         seam = seam_overlap_diff(prev, cur, d);
         if (seam <= SEAM_GOOD) {
             *seam_out = seam;
-            log_msg("  conservative shift %dpx (found=%d target=%d)\n", d, found_d, target_d);
+            log_msg("  seam pick %dpx (found=%d target=%d seam=%.2f)\n", d, found_d, target_d, seam);
             return d;
         }
-        if (seam < best_seam) {
-            best_seam = seam;
-            best_d = d;
+        if (seam <= SEAM_MAX_DIFF && (accept_d < 0 || d > accept_d)) {
+            accept_d = d;
+            accept_seam = seam;
         }
     }
 
-    if (conf >= CONF_HIGH) {
-        for (d = target_d + 1; d <= cap; d++) {
-            seam = seam_overlap_diff(prev, cur, d);
-            if (seam <= SEAM_GOOD && seam <= best_seam) {
-                best_seam = seam;
-                best_d = d;
-            }
-        }
+    if (accept_d > 0) {
+        *seam_out = accept_seam;
+        log_msg("  seam pick %dpx marginal (found=%d target=%d seam=%.2f)\n", accept_d, found_d, target_d, accept_seam);
+        return accept_d;
     }
 
-    if (best_seam > SEAM_MAX_DIFF) {
-        best_d = target_d;
-        best_seam = seam_overlap_diff(prev, cur, best_d);
-    }
-
-    if (found_d > cap) {
-        log_msg(
-            "  capped shift %dpx -> %dpx (found=%d conf=%.3f)\n",
-            found_d,
-            best_d,
-            found_d,
-            conf
-        );
-    }
-
-    *seam_out = best_seam;
-    return best_d;
+    *seam_out = seam_overlap_diff(prev, cur, target_d);
+    return -1;
 }
 
 /* ----------------------- Оверлей для выбора области ----------------------- */
@@ -838,6 +819,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
         int hit_bottom;
         int new_rows;
         int seam_ok;
+        int duplicate_guard;
 
         if (!capture_region_stable(x, y, w, h, &cur)) {
             break;
@@ -867,8 +849,8 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
 
             found_d = find_shift(&prev, &cur, target_d, &conf);
             trust = (conf >= CONF_MIN && found_d >= 1);
-            d = finalize_shift(&prev, &cur, found_d, target_d, conf, &seam_diff);
-            seam_ok = (seam_diff <= SEAM_MAX_DIFF);
+            d = find_shift_by_seam(&prev, &cur, found_d, target_d, &seam_diff);
+            seam_ok = (d >= 1 && seam_diff <= SEAM_MAX_DIFF);
 
             cap_d = target_d + (int)(target_d * MAX_SHIFT_OVER_FRAC);
             if (found_d > cap_d) {
@@ -883,19 +865,27 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
 
             if (!seam_ok) {
                 log_msg(
-                    "frame=%d bad seam diff=%.2f for d=%d, fallback to target_d=%d\n",
+                    "frame=%d bad seam diff=%.2f found=%d target=%d, skip append\n",
                     frames,
                     seam_diff,
-                    d,
+                    found_d,
                     target_d
                 );
                 g_bad_seam_streak++;
-                d = target_d;
-                seam_diff = seam_overlap_diff(&prev, &cur, d);
-                seam_ok = (seam_diff <= SEAM_MAX_DIFF);
-            } else {
-                g_bad_seam_streak = 0;
+                end_repeat++;
+                frame_free(&cur);
+                if (g_bad_seam_streak >= BAD_SEAM_STREAK_LIMIT) {
+                    log_msg("End of page: too many bad seams without valid stitch.\n");
+                    break;
+                }
+                if (end_repeat >= END_REPEAT_LIMIT) {
+                    log_msg("End of page: no valid stitch after repeated scrolls.\n");
+                    break;
+                }
+                notches += 1;
+                continue;
             }
+            g_bad_seam_streak = 0;
         }
 
         if (d > h) d = h;
@@ -908,6 +898,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
         bottom_diff = strip_mean_diff(&prev, prev.h - check_rows, &cur, cur.h - check_rows, check_rows);
         tail_diff = canvas_new_strip_diff(&canvas, &cur, d);
         no_progress = (bottom_diff < NO_PROGRESS_DIFF) && (tail_diff < NO_PROGRESS_DIFF);
+        duplicate_guard = (tail_diff < DUPLICATE_TAIL_DIFF && seam_diff > SEAM_GOOD);
 
         log_msg(
             "frame=%d shift=%dpx conf=%.3f seam=%.2f bottom=%.2f tail=%.2f window=%.2f\n",
@@ -919,6 +910,28 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
             tail_diff,
             current_shift_window_frac()
         );
+
+        if (duplicate_guard) {
+            log_msg(
+                "frame=%d duplicate guard tail=%.2f seam=%.2f, skip append\n",
+                frames,
+                tail_diff,
+                seam_diff
+            );
+            g_bad_seam_streak++;
+            end_repeat++;
+            frame_free(&cur);
+            if (g_bad_seam_streak >= BAD_SEAM_STREAK_LIMIT) {
+                log_msg("End of page: duplicate loop detected.\n");
+                break;
+            }
+            if (end_repeat >= END_REPEAT_LIMIT) {
+                log_msg("End of page: duplicate content without progress.\n");
+                break;
+            }
+            notches += 1;
+            continue;
+        }
 
         hit_bottom = (trust && d <= 4);
         if (no_progress || hit_bottom) {
