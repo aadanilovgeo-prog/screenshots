@@ -53,7 +53,16 @@ jobs:
           git add VERSION c/include/version.h c/dist/
           git diff --staged --quiet && echo "Nothing to commit" && exit 0
           git commit -m "release: scroll_capture v${VER} [skip ci]"
-          git push
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed, rebasing on origin/main..."
+            git fetch origin main
+            git pull --rebase origin main
+          done
+          echo "Failed to push release commit after retries"
+          exit 1
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
