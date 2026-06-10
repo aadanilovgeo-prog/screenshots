@@ -10,7 +10,7 @@
  *  - Сохранение результата в PNG.
  *
  * Сборка (MinGW-w64):
- *   gcc -O2 -o vrmshot_v6.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
+ *   gcc -O2 -o vrmshot_v7.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
  * Примечание: динамическая линковка обычно даёт меньше ложных AV-срабатываний,
  * чем полностью статический бинарник.
  *
@@ -454,7 +454,8 @@ static int find_shift(const Frame *prev, const Frame *cur, int hint, double *con
     return best_d;
 }
 
-static void focus_point(int cx, int cy) {
+/* Один раз в начале захвата: фокус окна без повторных кликов при скролле. */
+static void focus_point_once(int cx, int cy) {
     INPUT in[2];
 
     SetCursorPos(cx, cy);
@@ -468,11 +469,12 @@ static void focus_point(int cx, int cy) {
     Sleep(FOCUS_DELAY_MS);
 }
 
-/* Прокрутка по одной "ступеньке" за раз — меньше перелётов. */
+/* Прокрутка без клика — только позиция курсора и колесо. */
 static void scroll_wheel(int cx, int cy, int notches) {
     int i;
 
-    focus_point(cx, cy);
+    SetCursorPos(cx, cy);
+    Sleep(20);
     for (i = 0; i < notches; i++) {
         INPUT in;
         memset(&in, 0, sizeof(in));
@@ -783,8 +785,8 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
     Sleep(400);
 
     int cx = x + w/2, cy = y + h/2;
-    focus_point(cx, cy);
-    log_msg("Region: %d,%d %dx%d target_scroll~%dpx\n", x, y, w, h, (int)(h * (1.0 - OVERLAP_RATIO)));
+    focus_point_once(cx, cy);
+    log_msg("Region: %d,%d %dx%d target_scroll~%dpx (focus click once)\n", x, y, w, h, (int)(h * (1.0 - OVERLAP_RATIO)));
 
     /* Адаптивный шаг прокрутки.
      * ВАЖНО (доказано тестами): прокрутка должна оставлять БОЛЬШОЕ гарантированное
