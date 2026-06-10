@@ -10,7 +10,9 @@
  *  - Сохранение результата в PNG.
  *
  * Сборка (MinGW-w64):
- *   gcc -O2 -o vrmshot.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows -static
+ *   gcc -O2 -o vrmshot_v1.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
+ * Примечание: динамическая линковка обычно даёт меньше ложных AV-срабатываний,
+ * чем полностью статический бинарник.
  *
  * Управление:
  *   1) Запустить vrmshot.exe
@@ -61,7 +63,7 @@ static int capture_region(int x, int y, int w, int h, Frame *out) {
     HBITMAP hBmp = CreateCompatibleBitmap(hScreen, w, h);
     HGDIOBJ old = SelectObject(hMem, hBmp);
 
-    BitBlt(hMem, 0, 0, w, h, hScreen, x, y, SRCCOPY | CAPTUREBLT);
+    BitBlt(hMem, 0, 0, w, h, hScreen, x, y, SRCCOPY);
 
     BITMAPINFO bi;
     memset(&bi, 0, sizeof(bi));
@@ -210,10 +212,15 @@ static double frame_similarity_diff(const Frame *a, const Frame *b) {
 
 /* ----------------------- Прокрутка колёсиком в точке ----------------------- */
 static void scroll_wheel(int cx, int cy, int notches) {
+    INPUT in;
+
     SetCursorPos(cx, cy);
     Sleep(20);
-    /* WHEEL_DELTA = 120 на одну "ступеньку" */
-    mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (DWORD)(notches * -WHEEL_DELTA), 0);
+    memset(&in, 0, sizeof(in));
+    in.type = INPUT_MOUSE;
+    in.mi.dwFlags = MOUSEEVENTF_WHEEL;
+    in.mi.mouseData = (DWORD)(notches * -WHEEL_DELTA); /* 120 на одну "ступеньку" */
+    SendInput(1, &in, sizeof(in));
 }
 
 /* ----------------------- Оверлей для выбора области ----------------------- */
