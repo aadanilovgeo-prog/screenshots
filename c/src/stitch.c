@@ -23,9 +23,8 @@ typedef struct {
     int height;
 } FrameFeatures;
 
-static const int CROP_OFFSETS_CONFIDENT[] = { 0, 5, 10, 15 };
-static const int CROP_OFFSETS_SAFE[] = { 0, 5, 10, 15, 20 };
-static const int CROP_OFFSETS_ALL[] = { 0, 5, 10, 15, 20, 25 };
+static const int CROP_OFFSETS_SAFE[] = { -80, -50, -30, -20, -10, 0 };
+static const int CROP_OFFSETS_ALL[] = { -80, -50, -30, -20, -10, 0, 10, 20 };
 
 
 static float ncc_rows(const float *a, const float *b, int len) {
@@ -525,31 +524,11 @@ ScSafeCrop sc_choose_safe_crop(
     result.confidence = shift->confidence;
     result.safe_mode = safe_mode;
 
-    if (safe_mode && shift->confidence >= SC_CONFIDENCE_GOOD && !shift->scroll_overshoot) {
-        double seam = sc_evaluate_seam(above, below, initial);
-        if (seam <= SC_SEAM_WEAK) {
-            result.crop = initial;
-            result.weak_seam = seam > SC_SEAM_GOOD;
-            features_free(&fa);
-            features_free(&fb);
-            return result;
-        }
-    }
-
     {
-        const int *offsets;
-        int offset_count;
-
-        if (!safe_mode) {
-            offsets = CROP_OFFSETS_ALL;
-            offset_count = (int)(sizeof(CROP_OFFSETS_ALL) / sizeof(CROP_OFFSETS_ALL[0]));
-        } else if (shift->confidence >= SC_CONFIDENCE_GOOD) {
-            offsets = CROP_OFFSETS_CONFIDENT;
-            offset_count = (int)(sizeof(CROP_OFFSETS_CONFIDENT) / sizeof(CROP_OFFSETS_CONFIDENT[0]));
-        } else {
-            offsets = CROP_OFFSETS_SAFE;
-            offset_count = (int)(sizeof(CROP_OFFSETS_SAFE) / sizeof(CROP_OFFSETS_SAFE[0]));
-        }
+        const int *offsets = safe_mode ? CROP_OFFSETS_SAFE : CROP_OFFSETS_ALL;
+        int offset_count = safe_mode
+            ? (int)(sizeof(CROP_OFFSETS_SAFE) / sizeof(CROP_OFFSETS_SAFE[0]))
+            : (int)(sizeof(CROP_OFFSETS_ALL) / sizeof(CROP_OFFSETS_ALL[0]));
 
     for (i = 0; i < offset_count; i++) {
         int candidate = initial + offsets[i];
@@ -578,7 +557,7 @@ ScSafeCrop sc_choose_safe_crop(
             content_loss += 0.08 * (double)(candidate - initial) / (double)height;
         }
         if (candidate < initial) {
-            duplicate += 0.15 * (double)(initial - candidate) / (double)height;
+            duplicate += 0.06 * (double)(initial - candidate) / (double)height;
         }
 
         table_risk = table_seam_risk(&fa, &fb, candidate);
@@ -600,11 +579,7 @@ ScSafeCrop sc_choose_safe_crop(
             }
         }
 
-        key = content_loss * 1000.0 + table_risk * 120.0 + image_risk * 150.0 + duplicate * 200.0 + seam * 80.0;
-
-        if (candidate < initial) {
-            key += 80.0 * (double)(initial - candidate);
-        }
+        key = content_loss * 1000.0 + table_risk * 120.0 + image_risk * 150.0 + duplicate * 40.0 + seam * 80.0;
 
         if (safe_mode && shift->confidence < SC_CONFIDENCE_GOOD) {
             if (candidate > initial) {
@@ -630,8 +605,12 @@ ScSafeCrop sc_choose_safe_crop(
         result.duplicate_risk = fmax(result.duplicate_risk, 0.25);
     }
 
-    if (result.crop < initial) {
-        result.crop = initial;
+    if (safe_mode && result.weak_seam && result.crop > initial - 10) {
+        result.crop = initial - 10;
+        if (result.crop < min_crop) {
+            result.crop = min_crop;
+        }
+        result.duplicate_risk = fmax(result.duplicate_risk, 0.20);
     }
 
     }

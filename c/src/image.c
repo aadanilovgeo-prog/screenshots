@@ -148,9 +148,8 @@ void sc_frame_list_clear(ScFrameList *list) {
 
 ScImage *sc_image_append_crop(const ScImage *result, const ScImage *frame, int top_crop) {
     ScImage *out;
-    int overlap;
-    int keep;
     int new_h;
+    int src_h;
     int y;
     int row_bytes;
 
@@ -161,44 +160,26 @@ ScImage *sc_image_append_crop(const ScImage *result, const ScImage *frame, int t
         return NULL;
     }
 
-    overlap = top_crop;
-    if (overlap < 0) {
-        overlap = 0;
+    if (top_crop < 0) {
+        top_crop = 0;
     }
-    if (overlap >= frame->height) {
-        overlap = frame->height - 1;
-    }
-
-    keep = result->height - overlap;
-    if (keep < 0) {
-        keep = 0;
+    if (top_crop > frame->height - 1) {
+        top_crop = frame->height - 1;
     }
 
-    new_h = keep + frame->height;
+    src_h = frame->height - top_crop;
+    new_h = result->height + src_h;
     out = sc_image_create(result->width, new_h);
     if (!out) {
         return NULL;
     }
 
     row_bytes = result->width * 3;
-    if (keep > 0) {
-        memcpy(out->rgb, result->rgb, (size_t)keep * (size_t)row_bytes);
-    }
-
-    memcpy(
-        out->rgb + (size_t)keep * (size_t)row_bytes,
-        frame->rgb,
-        (size_t)frame->height * (size_t)row_bytes
-    );
-
-    for (y = 0; y < overlap; y++) {
-        int src_y = result->height - overlap + y;
-        if (src_y < 0) {
-            src_y = 0;
-        }
+    memcpy(out->rgb, result->rgb, (size_t)result->height * (size_t)row_bytes);
+    for (y = 0; y < src_h; y++) {
         memcpy(
-            out->rgb + (size_t)(keep + y) * (size_t)row_bytes,
-            result->rgb + (size_t)src_y * (size_t)row_bytes,
+            out->rgb + (size_t)(result->height + y) * (size_t)row_bytes,
+            frame->rgb + (size_t)(top_crop + y) * (size_t)row_bytes,
             (size_t)row_bytes
         );
     }

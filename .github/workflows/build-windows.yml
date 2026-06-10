@@ -34,7 +34,13 @@ jobs:
         run: |
           for /f "usebackq delims=" %%v in ("VERSION") do set SC_VER=%%v
           if not exist c\dist mkdir c\dist
+          if exist c\dist\scroll_capture_v1.0.5.exe (
+            move /y c\dist\scroll_capture_v1.0.5.exe c\dist\_legacy_v1.0.5.exe >nul
+          )
           del /q c\dist\scroll_capture_v*.exe 2>nul
+          if exist c\dist\_legacy_v1.0.5.exe (
+            move /y c\dist\_legacy_v1.0.5.exe c\dist\scroll_capture_v1.0.5.exe >nul
+          )
           cd c
           rc /nologo /fo scroll_capture.res scroll_capture.rc
           if errorlevel 1 exit /b 1
