@@ -10,6 +10,58 @@
 #define SC_MIN_ACCEPT_NEW_FRAC 0.08
 #define SC_END_CONFIRM_ATTEMPTS 4
 #define SC_END_RETRY_SETTLE_MS 450
+#define SC_STALL_REPEAT_LIMIT 1
+#define SC_STALL_DUP_RISK 0.78
+#define SC_STALL_SHIFT_TOLERANCE 12
+
+typedef struct {
+    int last_shift;
+    int last_overlap;
+    int repeat_count;
+} ScStallTracker;
+
+static void stall_tracker_reset(ScStallTracker *tracker) {
+    if (!tracker) {
+        return;
+    }
+    memset(tracker, 0, sizeof(*tracker));
+}
+
+static int stall_tracker_should_stop(
+    ScStallTracker *tracker,
+    const ScShiftData *shift,
+    const ScSafeCrop *crop,
+    int frame_height
+) {
+    int shift_similar;
+    int overlap_similar;
+    int high_dup;
+    int thin_overlap;
+    int bottom_bounce;
+
+    if (!tracker || !shift || !crop) {
+        return 0;
+    }
+
+    shift_similar = tracker->last_shift > 0
+        && abs(shift->detected_shift - tracker->last_shift) <= SC_STALL_SHIFT_TOLERANCE;
+    overlap_similar = tracker->last_overlap > 0
+        && abs(shift->detected_overlap - tracker->last_overlap) <= SC_STALL_SHIFT_TOLERANCE;
+    high_dup = crop->duplicate_risk >= SC_STALL_DUP_RISK;
+    thin_overlap = shift->detected_overlap < (int)(frame_height * 0.18);
+    bottom_bounce = shift->scroll_overshoot && thin_overlap && high_dup;
+
+    if ((shift_similar && overlap_similar && high_dup) || bottom_bounce) {
+        tracker->repeat_count++;
+    } else {
+        tracker->repeat_count = 0;
+    }
+
+    tracker->last_shift = shift->detected_shift;
+    tracker->last_overlap = shift->detected_overlap;
+
+    return tracker->repeat_count >= SC_STALL_REPEAT_LIMIT;
+}
 
 void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScrollSettings *scroll) {
     if (!scroll) {
@@ -330,6 +382,7 @@ int sc_capture_long_page(
     int index;
     int captured = 0;
     int max_output_height;
+    ScStallTracker stall_tracker;
     char frame_path[600];
     char preview_path[600];
 
@@ -341,6 +394,7 @@ int sc_capture_long_page(
     *frames_captured = 0;
     *reached_end = 0;
     *memory_limit_hit = 0;
+    stall_tracker_reset(&stall_tracker);
 
     max_output_height = sc_image_max_height(region->width);
 
@@ -444,6 +498,20 @@ int sc_capture_long_page(
 
         safe_crop = sc_choose_safe_crop(previous, current, &shift, safe_stitch);
         sc_stitch_log_frame(log, index, &shift, &safe_crop, 0);
+
+        if (stall_tracker_should_stop(&stall_tracker, &shift, &safe_crop, region->height)) {
+            printf(
+                "End of page: repeated scroll pattern detected "
+                "(shift=%dpx overlap=%dpx dup_risk=%.2f, %d similar frames).\n",
+                shift.detected_shift,
+                shift.detected_overlap,
+                safe_crop.duplicate_risk,
+                SC_STALL_REPEAT_LIMIT + 1
+            );
+            sc_image_free(current);
+            *reached_end = 1;
+            break;
+        }
 
         if (!stitch_append_frame(&stitched, current, safe_crop.crop, index)) {
             sc_image_free(current);
