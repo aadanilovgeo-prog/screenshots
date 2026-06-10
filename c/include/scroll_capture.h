@@ -149,6 +149,7 @@ void sc_countdown(int seconds, const char *message);
 int sc_focus_region(const ScRegion *region);
 void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScrollSettings *scroll);
 void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll);
+void sc_scroll_wheel_notches(const ScRegion *region, const ScScrollSettings *scroll, int notches);
 
 int sc_capture_region(const ScRegion *region, ScImage *out);
 int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out);

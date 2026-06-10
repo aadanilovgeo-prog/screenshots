@@ -81,16 +81,21 @@ static void wheel_at(int x, int y, int notches_down) {
     send_mouse_input(MOUSEEVENTF_WHEEL, (DWORD)(-(int)(SC_WHEEL_DELTA * notches_down)));
 }
 
-void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll) {
+void sc_scroll_wheel_notches(const ScRegion *region, const ScScrollSettings *scroll, int notches) {
     int x = region->left + region->width / 2;
     int y = region->top + region->height / 2;
-    int notches = scroll && scroll->notches_per_step > 0 ? scroll->notches_per_step : 1;
+    int count = notches > 0 ? notches : 1;
 
-    if (scroll->focus_each_step) {
+    if (scroll && scroll->focus_each_step) {
         sc_focus_region(region);
     }
 
-    wheel_at(x, y, notches);
+    wheel_at(x, y, count);
+}
+
+void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll) {
+    int notches = scroll && scroll->notches_per_step > 0 ? scroll->notches_per_step : 1;
+    sc_scroll_wheel_notches(region, scroll, notches);
 }
 
 int sc_capture_region(const ScRegion *region, ScImage *out) {
@@ -253,6 +258,12 @@ int sc_mkdir_p(const char *path) {
 int sc_focus_region(const ScRegion *region) {
     (void)region;
     return 0;
+}
+
+void sc_scroll_wheel_notches(const ScRegion *region, const ScScrollSettings *scroll, int notches) {
+    (void)region;
+    (void)scroll;
+    (void)notches;
 }
 
 void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll) {

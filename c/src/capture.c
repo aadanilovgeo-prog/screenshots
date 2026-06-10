@@ -8,6 +8,8 @@
 #define SC_STABLE_INTERVAL_MS 150
 #define SC_STABLE_DIFF 0.0035
 #define SC_MIN_ACCEPT_NEW_FRAC 0.08
+#define SC_END_CONFIRM_ATTEMPTS 4
+#define SC_END_RETRY_SETTLE_MS 450
 
 void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScrollSettings *scroll) {
     if (!scroll) {
@@ -90,6 +92,56 @@ int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
 
 #define SC_SCROLL_END 2
 
+static int choose_scroll_notches(
+    int micro,
+    int current_shift,
+    int micro_steps_used,
+    int min_shift,
+    int max_shift,
+    int base_notches
+) {
+    int base = base_notches > 0 ? base_notches : 1;
+
+    if (micro == 0) {
+        return 1;
+    }
+
+    if (current_shift >= min_shift) {
+        return 1;
+    }
+
+    if (current_shift > 0 && micro_steps_used > 0) {
+        int per_step = current_shift / micro_steps_used;
+        if (per_step < 1) {
+            per_step = 1;
+        }
+        if (current_shift + per_step * base > max_shift) {
+            return 1;
+        }
+    }
+
+    return base;
+}
+
+static int page_still_scrollable(
+    const ScImage *previous,
+    const ScImage *current,
+    int height,
+    double same_frame_threshold
+) {
+    ScShiftData probe;
+
+    if (sc_image_diff_ratio(previous, current) > same_frame_threshold) {
+        return 1;
+    }
+
+    if (!sc_detect_vertical_content_shift(previous, current, &probe)) {
+        return 0;
+    }
+
+    return probe.detected_shift >= (int)(height * SC_MIN_ACCEPT_NEW_FRAC);
+}
+
 static int adaptive_scroll_to_target(
     const ScRegion *region,
     const ScScrollSettings *scroll,
@@ -102,7 +154,8 @@ static int adaptive_scroll_to_target(
     int min_shift;
     int max_shift;
     int micro;
-    double diff;
+    int no_change_attempts = 0;
+    int base_notches;
 
     if (!region || !scroll || !previous || !current || !shift) {
         return 0;
@@ -117,20 +170,45 @@ static int adaptive_scroll_to_target(
         max_shift = min_shift + height / 10;
     }
 
+    base_notches = scroll->notches_per_step > 0 ? scroll->notches_per_step : 1;
     memset(shift, 0, sizeof(*shift));
 
     for (micro = 0; micro < scroll->max_micro_steps; micro++) {
-        sc_scroll_wheel_step(region, scroll);
+        int notches = choose_scroll_notches(
+            micro,
+            shift->detected_shift,
+            shift->micro_steps_used,
+            min_shift,
+            max_shift,
+            base_notches
+        );
+
+        sc_scroll_wheel_notches(region, scroll, notches);
         sc_sleep_ms((int)(scroll->micro_delay * 1000.0));
 
         if (!sc_wait_for_frame_stable(region, current)) {
             return 0;
         }
 
-        diff = sc_image_diff_ratio(previous, current);
-        if (diff <= same_frame_threshold) {
+        if (!page_still_scrollable(previous, current, height, same_frame_threshold)) {
+            no_change_attempts++;
+            printf(
+                "  [info] No scroll movement detected (%d/%d), retrying...\n",
+                no_change_attempts,
+                SC_END_CONFIRM_ATTEMPTS
+            );
+            if (no_change_attempts == 2) {
+                sc_focus_region(region);
+                sc_sleep_ms(200);
+            }
+            if (no_change_attempts < SC_END_CONFIRM_ATTEMPTS) {
+                sc_sleep_ms(SC_END_RETRY_SETTLE_MS + no_change_attempts * 150);
+                continue;
+            }
             return SC_SCROLL_END;
         }
+
+        no_change_attempts = 0;
 
         if (!sc_detect_vertical_content_shift(previous, current, shift)) {
             return 0;
@@ -140,8 +218,9 @@ static int adaptive_scroll_to_target(
         shift->new_content_frac = (double)shift->detected_shift / (double)height;
 
         printf(
-            "  Adaptive scroll micro=%d shift=%dpx (%.1f%% new content, target %.0f-%.0f%%)\n",
+            "  Adaptive scroll micro=%d notches=%d shift=%dpx (%.1f%% new content, target %.0f-%.0f%%)\n",
             micro + 1,
+            notches,
             shift->detected_shift,
             shift->new_content_frac * 100.0,
             scroll->min_new_frac * 100.0,
@@ -310,7 +389,10 @@ int sc_capture_long_page(
         );
 
         if (scroll_result == SC_SCROLL_END) {
-            printf("End of page reached (no content change after scroll).\n");
+            printf(
+                "End of page reached after %d failed scroll attempts (no movement).\n",
+                SC_END_CONFIRM_ATTEMPTS
+            );
             *reached_end = 1;
             sc_image_free(current);
             break;
