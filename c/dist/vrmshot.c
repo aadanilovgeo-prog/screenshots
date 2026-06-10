@@ -10,7 +10,7 @@
  *  - Сохранение результата в PNG.
  *
  * Сборка (MinGW-w64):
- *   gcc -O2 -o vrmshot_v5.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
+ *   gcc -O2 -o vrmshot_v6.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
  * Примечание: динамическая линковка обычно даёт меньше ложных AV-срабатываний,
  * чем полностью статический бинарник.
  *
@@ -33,7 +33,7 @@
 #include "stb_image_write.h"
 
 /* ----------------------- Настройки ----------------------- */
-#define OVERLAP_RATIO      0.50   /* доля высоты окна на перекрытие (больше = надёжнее склейка таблиц/повторяющихся строк) */
+#define OVERLAP_RATIO      0.56   /* доля высоты окна на перекрытие (больше = надёжнее склейка) */
 #define MAX_FRAMES         2000   /* предохранитель от бесконечного цикла (хватит на очень длинные страницы) */
 #define WHEEL_SETTLE_MS    600    /* пауза после прокрутки, мс (увеличена под плавную/инерционную прокрутку) */
 #define END_REPEAT_LIMIT   3      /* сколько кадров без прогресса подряд = конец страницы */
@@ -44,6 +44,9 @@
 #define SHIFT_WINDOW_BAD_LIMIT  2     /* подряд плохих швов до сужения окна */
 #define NO_PROGRESS_DIFF        2.5   /* порог "нет нового контента" */
 #define SEAM_MAX_DIFF           4.0   /* макс. допустимое расхождение на шве overlap */
+#define SEAM_GOOD               2.8   /* хороший шов — можно доверять сдвигу */
+#define MAX_SHIFT_OVER_FRAC     0.06  /* макс. перелёт относительно target_d (+6%) */
+#define CONF_HIGH               0.14  /* высокая уверенность для увеличения d */
 #define SAME_FRAME_DIFF         2.0   /* кадр почти не изменился после скролла */
 #define MAX_CANVAS_HEIGHT       600000
 #define STABLE_ATTEMPTS         3
@@ -513,6 +516,91 @@ static double seam_overlap_diff(const Frame *prev, const Frame *cur, int d) {
     return strip_mean_diff(prev, prev->h - check, cur, 0, check);
 }
 
+/* Консервативный выбор d: при сомнении лучше дубль, чем пропуск секции. */
+static int finalize_shift(
+    const Frame *prev,
+    const Frame *cur,
+    int found_d,
+    int target_d,
+    double conf,
+    double *seam_out
+) {
+    int cap;
+    int floor_d;
+    int d;
+    int best_d;
+    double best_seam;
+    double seam;
+
+    if (!seam_out || target_d < 1) {
+        return target_d;
+    }
+
+    if (found_d < 1) {
+        found_d = target_d;
+    }
+    if (found_d > cur->h) {
+        found_d = cur->h;
+    }
+
+    cap = target_d + (int)(target_d * MAX_SHIFT_OVER_FRAC);
+    if (cap > found_d) {
+        cap = found_d;
+    }
+    floor_d = target_d - target_d / 12;
+    if (floor_d < 8) {
+        floor_d = 8;
+    }
+
+    best_d = target_d;
+    best_seam = seam_overlap_diff(prev, cur, target_d);
+    if (best_seam <= SEAM_GOOD) {
+        *seam_out = best_seam;
+        return target_d;
+    }
+
+    for (d = target_d - 1; d >= floor_d; d--) {
+        seam = seam_overlap_diff(prev, cur, d);
+        if (seam <= SEAM_GOOD) {
+            *seam_out = seam;
+            log_msg("  conservative shift %dpx (found=%d target=%d)\n", d, found_d, target_d);
+            return d;
+        }
+        if (seam < best_seam) {
+            best_seam = seam;
+            best_d = d;
+        }
+    }
+
+    if (conf >= CONF_HIGH) {
+        for (d = target_d + 1; d <= cap; d++) {
+            seam = seam_overlap_diff(prev, cur, d);
+            if (seam <= SEAM_GOOD && seam <= best_seam) {
+                best_seam = seam;
+                best_d = d;
+            }
+        }
+    }
+
+    if (best_seam > SEAM_MAX_DIFF) {
+        best_d = target_d;
+        best_seam = seam_overlap_diff(prev, cur, best_d);
+    }
+
+    if (found_d > cap) {
+        log_msg(
+            "  capped shift %dpx -> %dpx (found=%d conf=%.3f)\n",
+            found_d,
+            best_d,
+            found_d,
+            conf
+        );
+    }
+
+    *seam_out = best_seam;
+    return best_d;
+}
+
 /* ----------------------- Оверлей для выбора области ----------------------- */
 static LRESULT CALLBACK OverlayProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -706,7 +794,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
      * безопасного максимума ~0.52*h.
      * Одна "ступенька" колеса = неизвестно сколько пикселей (зависит от
      * приложения), поэтому стартуем с оценки и калибруем по факту. */
-    int safe_max_scroll = (int)(h * 0.52);
+    int safe_max_scroll = (int)(h * 0.46);
     int target_scroll = (int)(h * (1.0 - OVERLAP_RATIO));
     if (target_scroll > safe_max_scroll) target_scroll = safe_max_scroll;
     if (target_scroll < 20) target_scroll = 20;
@@ -740,7 +828,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
         double quick_diff;
         double bottom_diff;
         double tail_diff;
-        double seam_diff;
+        double seam_diff = 1e18;
         int d;
         int trust;
         int check_rows;
@@ -771,31 +859,45 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
             continue;
         }
 
-        d = find_shift(&prev, &cur, target_d, &conf);
-        trust = (conf >= CONF_MIN && d >= 1);
-        if (!trust) {
-            d = target_d;
+        {
+            int found_d;
+            int cap_d;
+
+            found_d = find_shift(&prev, &cur, target_d, &conf);
+            trust = (conf >= CONF_MIN && found_d >= 1);
+            d = finalize_shift(&prev, &cur, found_d, target_d, conf, &seam_diff);
+            seam_ok = (seam_diff <= SEAM_MAX_DIFF);
+
+            cap_d = target_d + (int)(target_d * MAX_SHIFT_OVER_FRAC);
+            if (found_d > cap_d) {
+                if (notches > 1) {
+                    notches--;
+                }
+                px_per_notch = (px_per_notch * 11) / 10;
+                if (px_per_notch < 1) {
+                    px_per_notch = 1;
+                }
+            }
+
+            if (!seam_ok) {
+                log_msg(
+                    "frame=%d bad seam diff=%.2f for d=%d, fallback to target_d=%d\n",
+                    frames,
+                    seam_diff,
+                    d,
+                    target_d
+                );
+                g_bad_seam_streak++;
+                d = target_d;
+                seam_diff = seam_overlap_diff(&prev, &cur, d);
+                seam_ok = (seam_diff <= SEAM_MAX_DIFF);
+            } else {
+                g_bad_seam_streak = 0;
+            }
         }
+
         if (d > h) d = h;
         if (d < 1) d = 1;
-
-        seam_diff = seam_overlap_diff(&prev, &cur, d);
-        seam_ok = (seam_diff <= SEAM_MAX_DIFF);
-        if (!seam_ok) {
-            log_msg(
-                "frame=%d bad seam diff=%.2f for d=%d, fallback to target_d=%d\n",
-                frames,
-                seam_diff,
-                d,
-                target_d
-            );
-            g_bad_seam_streak++;
-            d = target_d;
-            seam_diff = seam_overlap_diff(&prev, &cur, d);
-            seam_ok = (seam_diff <= SEAM_MAX_DIFF);
-        } else {
-            g_bad_seam_streak = 0;
-        }
 
         check_rows = d;
         if (check_rows > 48) check_rows = 48;
