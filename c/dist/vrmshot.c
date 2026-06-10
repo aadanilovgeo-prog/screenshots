@@ -10,7 +10,7 @@
  *  - Сохранение результата в PNG.
  *
  * Сборка (MinGW-w64):
- *   gcc -O2 -o vrmshot_v3.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
+ *   gcc -O2 -o vrmshot_v4.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
  * Примечание: динамическая линковка обычно даёт меньше ложных AV-срабатываний,
  * чем полностью статический бинарник.
  *
@@ -32,13 +32,14 @@
 #include "stb_image_write.h"
 
 /* ----------------------- Настройки ----------------------- */
-#define OVERLAP_RATIO      0.58   /* доля высоты окна на перекрытие (больше = надёжнее склейка таблиц/повторяющихся строк) */
+#define OVERLAP_RATIO      0.50   /* доля высоты окна на перекрытие (больше = надёжнее склейка таблиц/повторяющихся строк) */
 #define MAX_FRAMES         2000   /* предохранитель от бесконечного цикла (хватит на очень длинные страницы) */
 #define WHEEL_SETTLE_MS    600    /* пауза после прокрутки, мс (увеличена под плавную/инерционную прокрутку) */
-#define END_REPEAT_LIMIT   4      /* сколько почти-одинаковых кадров подряд = конец страницы */
+#define END_REPEAT_LIMIT   3      /* сколько кадров без прогресса подряд = конец страницы */
 #define MIN_MATCH_ROWS     8      /* минимально осмысленное число строк перекрытия */
-#define CONF_MIN           0.10   /* мин. уверенность матча; ниже — доверяем ожидаемому шагу (защита от прыжка на похожую строку) */
-#define MAX_SHIFT_OVERSHOOT  1.12 /* макс. сдвиг относительно target_d; иначе риск пропуска секций */
+#define CONF_MIN           0.06   /* мин. уверенность матча; ниже — доверяем ожидаемому шагу */
+#define SHIFT_WINDOW_FRAC  0.28   /* поиск сдвига только вокруг ожидаемого шага (±28%) */
+#define NO_PROGRESS_DIFF   2.5   /* порог "нет нового контента" по нижней полосе кадра */
 
 /* ----------------------- Структура кадра ----------------------- */
 typedef struct {
@@ -129,86 +130,185 @@ static long row_diff(const int *a, const int *b, int n) {
     return s;
 }
 
-/* ----------------------- Поиск величины прокрутки между кадрами -----------------------
- * Геометрия: общий контент = ВЕРХ нового кадра (cur) совпадает с НИЗОМ предыдущего (prev).
- * Берём шаблон band строк с самого верха cur и ищем, на какой строке y в prev
- * он лучше всего совпадает. Тогда:
- *   d (величина прокрутки в пикселях) = y
- *   overlap (перекрытие) = h - d
- *   новые строки внизу cur = d
- *
- * Ключевые приёмы (проверены тестами на реальном тексте):
- *  - band фиксирован и невелик (помещается в гарантированное перекрытие);
- *  - перебор d по всему диапазону [1 .. h-band];
- *  - мягкий штраф за отклонение от ожидаемого шага hint (разрешает
- *    периодические неоднозначности текста, но даёт концевому кадру
- *    "уехать" к истинному малому сдвигу);
- *  - возвращаем confidence: насколько глобальный минимум выражен.
- *
- * Возвращает d (>=1) или -1 при ошибке. *conf — уверенность (больше = лучше).
- */
-static int find_shift(const Frame *prev, const Frame *cur, int hint, double *conf) {
+static int match_profile_cols(const Frame *f, int *step_out, int *ncols_out) {
     int ncols = 220;
-    int step = cur->w / ncols; if (step < 1) step = 1;
-    ncols = cur->w / step; if (ncols < 1) ncols = 1;
+    int step = f->w / ncols;
+    if (step < 1) step = 1;
+    ncols = f->w / step;
+    if (ncols < 1) ncols = 1;
     if (ncols > 300) ncols = 300;
-
-    int band = 100;
-    if (band > cur->h / 3) band = cur->h / 3;
-    if (band < MIN_MATCH_ROWS) band = MIN_MATCH_ROWS;
-
-    int *tmpl = (int*)malloc(sizeof(int) * ncols * band);
-    int *line = (int*)malloc(sizeof(int) * ncols);
-    if (!tmpl || !line) { free(tmpl); free(line); if (conf) *conf = 0; return -1; }
-
-    for (int r = 0; r < band; r++)
-        row_profile(cur, r, tmpl + (size_t)r * ncols, step, ncols);
-
-    int hi = prev->h - band; if (hi < 1) hi = 1;
-    double best = -1, second = -1;
-    int best_d = -1;
-
-    for (int d = 1; d <= hi; d++) {
-        int y = d;
-        long acc = 0;
-        for (int r = 0; r < band; r++) {
-            row_profile(prev, y + r, line, step, ncols);
-            acc += row_diff(tmpl + (size_t)r * ncols, line, ncols);
-        }
-        double score = (double)acc / (double)(band * ncols);
-        score += abs(d - hint) * 0.10; /* мягкий приоритет ожидаемого шага */
-        if (best < 0 || score < best) { second = best; best = score; best_d = d; }
-        else if (second < 0 || score < second) { second = score; }
-    }
-
-    free(tmpl); free(line);
-    if (conf) *conf = (best <= 0) ? 999.0 : (second - best) / (best + 1.0);
-    return best_d;
+    *step_out = step;
+    *ncols_out = ncols;
+    return 1;
 }
 
-/* Насколько два кадра идентичны целиком (для детекта конца). 0 = идентичны. */
-static double frame_similarity_diff(const Frame *a, const Frame *b) {
-    if (a->w != b->w || a->h != b->h) return 1e18;
-    int ncols = 64;
-    int step = a->w / ncols; if (step < 1) step = 1;
-    ncols = a->w / step; if (ncols < 1) ncols = 1;
-    if (ncols > 256) ncols = 256;
+static int match_band_rows(const Frame *f) {
+    int band = 80;
+    if (band > f->h / 4) band = f->h / 4;
+    if (band < MIN_MATCH_ROWS) band = MIN_MATCH_ROWS;
+    return band;
+}
 
-    int *pa = (int*)malloc(sizeof(int)*ncols);
-    int *pb = (int*)malloc(sizeof(int)*ncols);
-    if (!pa || !pb) { free(pa); free(pb); return 1e18; }
+/* Оценка совпадения: верх cur совпадает с prev, начиная со строки d. */
+static double shift_match_score(
+    const Frame *prev,
+    const Frame *cur,
+    int d,
+    int band,
+    int step,
+    int ncols,
+    int *tmpl,
+    int *line
+) {
+    long acc = 0;
+    int y;
 
-    long total = 0;
-    int rows = 0;
-    for (int r = 0; r < a->h; r += 4) {
-        row_profile(a, r, pa, step, ncols);
-        row_profile(b, r, pb, step, ncols);
-        total += row_diff(pa, pb, ncols);
-        rows++;
+    if (d < 1 || d + band > prev->h) {
+        return 1e18;
     }
-    free(pa); free(pb);
-    if (rows == 0) return 1e18;
-    return (double)total / (double)(rows * ncols);
+
+    for (int r = 0; r < band; r++) {
+        row_profile(cur, r, tmpl + (size_t)r * ncols, step, ncols);
+    }
+
+    y = d;
+    for (int r = 0; r < band; r++) {
+        row_profile(prev, y + r, line, step, ncols);
+        acc += row_diff(tmpl + (size_t)r * ncols, line, ncols);
+    }
+
+    return (double)acc / (double)(band * ncols);
+}
+
+/* Средняя разница между двумя полосами строк одного кадра. */
+static double strip_mean_diff(const Frame *a, int a_row, const Frame *b, int b_row, int rows) {
+    int step, ncols;
+    int *pa;
+    int *pb;
+    long total = 0;
+    int count = 0;
+
+    if (!a || !b || rows < 1) {
+        return 1e18;
+    }
+    if (a_row < 0 || b_row < 0 || a_row + rows > a->h || b_row + rows > b->h) {
+        return 1e18;
+    }
+
+    match_profile_cols(a, &step, &ncols);
+    pa = (int*)malloc(sizeof(int) * (size_t)ncols);
+    pb = (int*)malloc(sizeof(int) * (size_t)ncols);
+    if (!pa || !pb) {
+        free(pa);
+        free(pb);
+        return 1e18;
+    }
+
+    for (int r = 0; r < rows; r += 2) {
+        row_profile(a, a_row + r, pa, step, ncols);
+        row_profile(b, b_row + r, pb, step, ncols);
+        total += row_diff(pa, pb, ncols);
+        count++;
+    }
+
+    free(pa);
+    free(pb);
+    if (count == 0) {
+        return 1e18;
+    }
+    return (double)total / (double)(count * ncols);
+}
+
+/* Поиск сдвига только в окне вокруг hint + отдельная проверка малого сдвига у низа страницы. */
+static int find_shift(const Frame *prev, const Frame *cur, int hint, double *conf) {
+    int step, ncols;
+    int band;
+    int hi;
+    int lo;
+    int hi_win;
+    int best_d = -1;
+    int small_d = -1;
+    double best = -1;
+    double second = -1;
+    double small_best = -1;
+    double hint_score;
+    int *tmpl;
+    int *line;
+
+    if (!prev || !cur || hint < 1) {
+        if (conf) *conf = 0;
+        return -1;
+    }
+
+    match_profile_cols(cur, &step, &ncols);
+    band = match_band_rows(cur);
+    hi = prev->h - band;
+    if (hi < 1) hi = 1;
+
+    tmpl = (int*)malloc(sizeof(int) * (size_t)ncols * (size_t)band);
+    line = (int*)malloc(sizeof(int) * (size_t)ncols);
+    if (!tmpl || !line) {
+        free(tmpl);
+        free(line);
+        if (conf) *conf = 0;
+        return -1;
+    }
+
+    lo = hint - (int)(hint * SHIFT_WINDOW_FRAC);
+    hi_win = hint + (int)(hint * SHIFT_WINDOW_FRAC);
+    if (lo < 1) lo = 1;
+    if (hi_win > hi) hi_win = hi;
+
+    for (int d = 1; d <= hi; d++) {
+        double score;
+        int in_window = (d >= lo && d <= hi_win);
+        int is_small = (d <= 12);
+
+        if (!in_window && !is_small) {
+            continue;
+        }
+
+        score = shift_match_score(prev, cur, d, band, step, ncols, tmpl, line);
+        if (is_small && (small_best < 0 || score < small_best)) {
+            small_best = score;
+            small_d = d;
+        }
+        if (!in_window) {
+            continue;
+        }
+
+        score += abs(d - hint) * 0.05;
+        if (best < 0 || score < best) {
+            second = best;
+            best = score;
+            best_d = d;
+        } else if (second < 0 || score < second) {
+            second = score;
+        }
+    }
+
+    hint_score = shift_match_score(prev, cur, hint, band, step, ncols, tmpl, line);
+    if (best_d < 0) {
+        best_d = hint;
+        best = hint_score;
+        second = -1;
+    } else if (hint_score <= best * 1.08) {
+        best_d = hint;
+        best = hint_score;
+    }
+
+    if (small_d > 0 && small_best <= best * 0.92 && small_d <= 8) {
+        best_d = small_d;
+        best = small_best;
+    }
+
+    free(tmpl);
+    free(line);
+
+    if (conf) {
+        *conf = (best <= 0) ? 999.0 : (second - best) / (best + 1.0);
+    }
+    return best_d;
 }
 
 /* ----------------------- Прокрутка колёсиком в точке ----------------------- */
@@ -345,6 +445,25 @@ typedef struct {
     unsigned char *px; /* RGB */
 } Canvas;
 
+static double canvas_new_strip_diff(const Canvas *canvas, const Frame *cur, int rows) {
+    Frame tail;
+    int check_rows;
+
+    if (!canvas || !cur || rows < 1 || canvas->h < rows || canvas->w != cur->w) {
+        return 1e18;
+    }
+
+    check_rows = rows;
+    if (check_rows > 64) check_rows = 64;
+
+    memset(&tail, 0, sizeof(tail));
+    tail.w = canvas->w;
+    tail.h = check_rows;
+    tail.px = canvas->px + (size_t)(canvas->h - check_rows) * (size_t)canvas->w * 3u;
+
+    return strip_mean_diff(&tail, 0, cur, cur->h - check_rows, check_rows);
+}
+
 static int canvas_append(Canvas *c, const unsigned char *src, int w, int rows, int src_row_start) {
     if (c->w == 0) c->w = w;
     if (w != c->w) return 0;
@@ -422,42 +541,50 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
 
         /* ищем величину прокрутки d (новые строки внизу cur) */
         double conf;
-        int d = find_shift(&prev, &cur, target_d, &conf);
+        int d;
+        int trust;
+        int check_rows;
+        double bottom_diff;
+        double tail_diff;
+        int no_progress;
+        int hit_bottom;
 
-        /* Защита от "прыжка" на похожую строку (типично для таблиц):
-         * если уверенность матча низкая, не доверяем ему и берём ожидаемый
-         * (стабильный) шаг прокрутки. Это предотвращает потерю данных. */
-        int trust = (conf >= CONF_MIN && d >= 1);
-        int max_d = (int)(target_d * MAX_SHIFT_OVERSHOOT);
-        if (max_d < 8) max_d = 8;
-        if (max_d > h - MIN_MATCH_ROWS) max_d = h - MIN_MATCH_ROWS;
-
+        d = find_shift(&prev, &cur, target_d, &conf);
+        trust = (conf >= CONF_MIN && d >= 1);
         if (!trust) {
             d = target_d;
-        } else if (d > max_d) {
-            printf(
-                "  [warn] shift %dpx > max %dpx (conf=%.3f), using target %dpx\n",
-                d,
-                max_d,
-                conf,
-                target_d
-            );
-            d = target_d;
-            trust = 0;
         }
         if (d > h) d = h;
         if (d < 1) d = 1;
 
-        /* Детект конца страницы: только при уверенном почти нулевом сдвиге.
-         * Не используем "похожесть кадров" отдельно: на таблицах с повторяющимися
-         * строками она даёт ложные срабатывания и рассинхрон prev/cur. */
-        int hit_bottom = (trust && d <= 3);
-        if (hit_bottom) {
-            if (d >= 1 && d <= h)
+        check_rows = d;
+        if (check_rows > 48) check_rows = 48;
+        if (check_rows < 8) check_rows = 8;
+
+        bottom_diff = strip_mean_diff(&prev, prev.h - check_rows, &cur, cur.h - check_rows, check_rows);
+        tail_diff = canvas_new_strip_diff(&canvas, &cur, d);
+        no_progress = (bottom_diff < NO_PROGRESS_DIFF) || (tail_diff < NO_PROGRESS_DIFF);
+
+        printf(
+            "  frame=%d shift=%dpx conf=%.3f bottom_diff=%.2f tail_diff=%.2f\n",
+            frames,
+            d,
+            conf,
+            bottom_diff,
+            tail_diff
+        );
+
+        hit_bottom = (trust && d <= 4);
+        if (no_progress || hit_bottom) {
+            if (hit_bottom && !no_progress && d >= 1 && d <= h) {
                 canvas_append(&canvas, cur.px, cur.w, d, h - d);
+            }
             end_repeat++;
             frame_free(&cur);
-            if (end_repeat >= END_REPEAT_LIMIT) break;
+            if (end_repeat >= END_REPEAT_LIMIT) {
+                printf("  End of page: no further progress.\n");
+                break;
+            }
             notches += 1;
             continue;
         }
@@ -468,7 +595,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
         /* Калибровка колеса: фактически прокрутилось d пикселей за notches ступенек.
          * Обновляем оценку px_per_notch (сглаженно) и пересчитываем notches так,
          * чтобы следующий шаг попадал в target_scroll. */
-        if (d > 4 && notches > 0 && d <= max_d) {
+        if (d > 4 && notches > 0) {
             int measured = d / notches;
             if (measured > 2) {
                 px_per_notch = (px_per_notch * 2 + measured) / 3;
