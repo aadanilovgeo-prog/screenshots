@@ -10,7 +10,7 @@
  *  - Сохранение результата в PNG.
  *
  * Сборка (MinGW-w64):
- *   gcc -O2 -o vrmshot_v1.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
+ *   gcc -O2 -o vrmshot_v3.exe vrmshot.c -lgdi32 -luser32 -lkernel32 -mwindows
  * Примечание: динамическая линковка обычно даёт меньше ложных AV-срабатываний,
  * чем полностью статический бинарник.
  *
@@ -32,12 +32,13 @@
 #include "stb_image_write.h"
 
 /* ----------------------- Настройки ----------------------- */
-#define OVERLAP_RATIO      0.50   /* доля высоты окна на перекрытие (больше = надёжнее склейка таблиц/повторяющихся строк) */
+#define OVERLAP_RATIO      0.58   /* доля высоты окна на перекрытие (больше = надёжнее склейка таблиц/повторяющихся строк) */
 #define MAX_FRAMES         2000   /* предохранитель от бесконечного цикла (хватит на очень длинные страницы) */
 #define WHEEL_SETTLE_MS    600    /* пауза после прокрутки, мс (увеличена под плавную/инерционную прокрутку) */
 #define END_REPEAT_LIMIT   4      /* сколько почти-одинаковых кадров подряд = конец страницы */
 #define MIN_MATCH_ROWS     8      /* минимально осмысленное число строк перекрытия */
-#define CONF_MIN           0.06   /* мин. уверенность матча; ниже — доверяем ожидаемому шагу (защита от прыжка на похожую строку) */
+#define CONF_MIN           0.10   /* мин. уверенность матча; ниже — доверяем ожидаемому шагу (защита от прыжка на похожую строку) */
+#define MAX_SHIFT_OVERSHOOT  1.12 /* макс. сдвиг относительно target_d; иначе риск пропуска секций */
 
 /* ----------------------- Структура кадра ----------------------- */
 typedef struct {
@@ -175,7 +176,7 @@ static int find_shift(const Frame *prev, const Frame *cur, int hint, double *con
             acc += row_diff(tmpl + (size_t)r * ncols, line, ncols);
         }
         double score = (double)acc / (double)(band * ncols);
-        score += abs(d - hint) * 0.04; /* мягкий приоритет ожидаемого шага */
+        score += abs(d - hint) * 0.10; /* мягкий приоритет ожидаемого шага */
         if (best < 0 || score < best) { second = best; best = score; best_d = d; }
         else if (second < 0 || score < second) { second = score; }
     }
@@ -427,38 +428,47 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lpCmd, int nShow) {
          * если уверенность матча низкая, не доверяем ему и берём ожидаемый
          * (стабильный) шаг прокрутки. Это предотвращает потерю данных. */
         int trust = (conf >= CONF_MIN && d >= 1);
-        if (!trust) d = target_d;
+        int max_d = (int)(target_d * MAX_SHIFT_OVERSHOOT);
+        if (max_d < 8) max_d = 8;
+        if (max_d > h - MIN_MATCH_ROWS) max_d = h - MIN_MATCH_ROWS;
+
+        if (!trust) {
+            d = target_d;
+        } else if (d > max_d) {
+            printf(
+                "  [warn] shift %dpx > max %dpx (conf=%.3f), using target %dpx\n",
+                d,
+                max_d,
+                conf,
+                target_d
+            );
+            d = target_d;
+            trust = 0;
+        }
         if (d > h) d = h;
         if (d < 1) d = 1;
 
-        /* Детект конца страницы: страница практически перестала прокручиваться.
-         * Конец засчитываем при УВЕРЕННОМ совпадении с очень малым сдвигом
-         * (упёрлись в низ) ЛИБО при почти полной идентичности кадров (статичный
-         * футер/пустота). Несколько таких подряд = достигли низа. */
-        double sim = frame_similarity_diff(&prev, &cur);
-        int hit_bottom = (trust && d <= 3);          /* упор прокрутки */
-        int static_frame = (sim < 1.2);              /* кадр почти не меняется */
-        if (hit_bottom || static_frame) {
-            /* при реальном упоре дописываем небольшой найденный остаток;
-             * статичные (почти пустые/неизменные) кадры НЕ дописываем,
-             * чтобы внизу не копился лишний белый/повторяющийся хвост */
-            if (hit_bottom && !static_frame && d >= 1 && d <= h)
+        /* Детект конца страницы: только при уверенном почти нулевом сдвиге.
+         * Не используем "похожесть кадров" отдельно: на таблицах с повторяющимися
+         * строками она даёт ложные срабатывания и рассинхрон prev/cur. */
+        int hit_bottom = (trust && d <= 3);
+        if (hit_bottom) {
+            if (d >= 1 && d <= h)
                 canvas_append(&canvas, cur.px, cur.w, d, h - d);
             end_repeat++;
             frame_free(&cur);
             if (end_repeat >= END_REPEAT_LIMIT) break;
-            notches += 1; /* вдруг прокрутка "залипла" — толкнём сильнее */
+            notches += 1;
             continue;
-        } else {
-            end_repeat = 0;
         }
+        end_repeat = 0;
 
         int new_rows = d;
 
         /* Калибровка колеса: фактически прокрутилось d пикселей за notches ступенек.
          * Обновляем оценку px_per_notch (сглаженно) и пересчитываем notches так,
          * чтобы следующий шаг попадал в target_scroll. */
-        if (d > 4 && notches > 0) {
+        if (d > 4 && notches > 0 && d <= max_d) {
             int measured = d / notches;
             if (measured > 2) {
                 px_per_notch = (px_per_notch * 2 + measured) / 3;
