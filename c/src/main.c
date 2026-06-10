@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
     printf("Output image size: %d x %d px\n", result->width, result->height);
     if (memory_limit_hit) {
         printf(
-            "Warning: memory limit reached — partial screenshot saved (%d px height).\n"
+            "Warning: memory limit reached — screenshot saved (%d px height).\n"
             "Use a narrower capture region for longer pages.\n",
             result->height
         );

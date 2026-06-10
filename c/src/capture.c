@@ -11,8 +11,9 @@
 #define SC_END_CONFIRM_ATTEMPTS 4
 #define SC_END_RETRY_SETTLE_MS 450
 #define SC_STALL_REPEAT_LIMIT 1
-#define SC_STALL_DUP_RISK 0.78
+#define SC_STALL_DUP_RISK 0.82
 #define SC_STALL_SHIFT_TOLERANCE 12
+#define SC_STALL_THIN_OVERLAP_FRAC 0.20
 
 typedef struct {
     int last_shift;
@@ -48,10 +49,11 @@ static int stall_tracker_should_stop(
     overlap_similar = tracker->last_overlap > 0
         && abs(shift->detected_overlap - tracker->last_overlap) <= SC_STALL_SHIFT_TOLERANCE;
     high_dup = crop->duplicate_risk >= SC_STALL_DUP_RISK;
-    thin_overlap = shift->detected_overlap < (int)(frame_height * 0.18);
+    thin_overlap = shift->detected_overlap < (int)(frame_height * SC_STALL_THIN_OVERLAP_FRAC);
     bottom_bounce = shift->scroll_overshoot && thin_overlap && high_dup;
+    rubber_band = shift_similar && overlap_similar && high_dup && thin_overlap;
 
-    if ((shift_similar && overlap_similar && high_dup) || bottom_bounce) {
+    if (bottom_bounce || rubber_band) {
         tracker->repeat_count++;
     } else {
         tracker->repeat_count = 0;
@@ -466,6 +468,7 @@ int sc_capture_long_page(
         if (!stitch_append_frame(&stitched, current, safe_crop.crop, index)) {
             sc_image_free(current);
             *memory_limit_hit = 1;
+            *reached_end = 1;
             break;
         }
 
