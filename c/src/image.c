@@ -15,6 +15,20 @@ int sc_image_size_ok(int width, int height) {
     return bytes <= SC_MAX_IMAGE_BYTES;
 }
 
+int sc_image_max_height(int width) {
+    size_t max_h;
+
+    if (width <= 0) {
+        return 0;
+    }
+
+    max_h = SC_MAX_IMAGE_BYTES / ((size_t)width * 3u);
+    if (max_h > (size_t)SC_MAX_OUTPUT_HEIGHT) {
+        max_h = (size_t)SC_MAX_OUTPUT_HEIGHT;
+    }
+    return (int)max_h;
+}
+
 ScImage *sc_image_create(int width, int height) {
     ScImage *img;
     size_t bytes;

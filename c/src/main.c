@@ -13,6 +13,7 @@ int main(int argc, char **argv) {
     ScImage *result;
     int frames_captured = 0;
     int reached_end = 0;
+    int memory_limit_hit = 0;
     int parse_result;
     char output_path[512];
 
@@ -68,6 +69,7 @@ int main(int argc, char **argv) {
             &result,
             &frames_captured,
             &reached_end,
+            &memory_limit_hit,
             &stitch_log
         )) {
         fprintf(stderr, "Capture failed.\n");
@@ -111,7 +113,13 @@ int main(int argc, char **argv) {
 
     printf("Done: %s\n", output_path);
     printf("Output image size: %d x %d px\n", result->width, result->height);
-    if (!reached_end) {
+    if (memory_limit_hit) {
+        printf(
+            "Warning: memory limit reached — partial screenshot saved (%d px height).\n"
+            "Use a narrower capture region for longer pages.\n",
+            result->height
+        );
+    } else if (!reached_end) {
         printf("Warning: max frame limit reached before end of page. Increase --max-frames if needed.\n");
     }
 

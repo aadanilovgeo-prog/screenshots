@@ -282,11 +282,19 @@ static int stitch_append_frame(
         new_h = frame->height;
     }
     if (!sc_image_size_ok(frame->width, new_h)) {
+        int max_h = sc_image_max_height(frame->width);
         fprintf(
             stderr,
-            "Output image would exceed memory limit at frame %d (height ~%d px).\n",
+            "Output image would exceed memory limit at frame %d (height ~%d px, max ~%d px for width %d).\n",
             frame_index,
-            new_h
+            new_h,
+            max_h,
+            frame->width
+        );
+        fprintf(
+            stderr,
+            "Saving partial result (%d px). Use a narrower capture region for longer pages.\n",
+            (*stitched)->height
         );
         return 0;
     }
@@ -313,6 +321,7 @@ int sc_capture_long_page(
     ScImage **out_result,
     int *frames_captured,
     int *reached_end,
+    int *memory_limit_hit,
     ScStitchLog *log
 ) {
     ScImage *previous = NULL;
@@ -320,16 +329,20 @@ int sc_capture_long_page(
     ScImage *stitched = NULL;
     int index;
     int captured = 0;
+    int max_output_height;
     char frame_path[600];
     char preview_path[600];
 
-    if (!region || !scroll || !out_result || !frames_captured || !reached_end) {
+    if (!region || !scroll || !out_result || !frames_captured || !reached_end || !memory_limit_hit) {
         return 0;
     }
 
     *out_result = NULL;
     *frames_captured = 0;
     *reached_end = 0;
+    *memory_limit_hit = 0;
+
+    max_output_height = sc_image_max_height(region->width);
 
     if (scroll->focus_click) {
         printf("Focusing article region (mouse click)...\n");
@@ -361,11 +374,14 @@ int sc_capture_long_page(
     }
 
     printf(
-        "Capturing (target %.0f-%.0f%% new/frame, %d notch(es)/step, safe stitch=%s)...\n",
+        "Capturing (target %.0f-%.0f%% new/frame, %d notch(es)/step, safe stitch=%s)...\n"
+        "Max output height for this region: ~%d px (~%.0f MB)\n",
         scroll->min_new_frac * 100.0,
         scroll->max_new_frac * 100.0,
         scroll->notches_per_step,
-        safe_stitch ? "on" : "off"
+        safe_stitch ? "on" : "off",
+        max_output_height,
+        (double)SC_MAX_IMAGE_BYTES / (1024.0 * 1024.0)
     );
 
     for (index = 1; index <= max_frames; index++) {
@@ -431,6 +447,7 @@ int sc_capture_long_page(
 
         if (!stitch_append_frame(&stitched, current, safe_crop.crop, index)) {
             sc_image_free(current);
+            *memory_limit_hit = 1;
             break;
         }
 
@@ -447,6 +464,14 @@ int sc_capture_long_page(
         captured++;
 
         printf("  Stitched height: %d px (%d frame(s))\n", stitched->height, captured);
+
+        if (max_output_height > 0 && stitched->height > (max_output_height * 9) / 10) {
+            printf(
+                "  [warn] Approaching memory limit (%d / ~%d px)\n",
+                stitched->height,
+                max_output_height
+            );
+        }
 
         if (captured >= max_frames) {
             break;
