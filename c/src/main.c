@@ -94,6 +94,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (frames_captured < 3 && reached_end) {
+        printf(
+            "Warning: capture ended early after %d frame(s) — saving available content.\n",
+            frames_captured
+        );
+    }
+
     printf("Captured %d frame(s), final size %d x %d px\n", frames_captured, result->width, result->height);
 
     if (cfg.has_output) {
