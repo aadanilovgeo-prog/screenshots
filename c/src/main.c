@@ -45,15 +45,13 @@ int main(int argc, char **argv) {
 
     printf(
         "Region: %d,%d %dx%d\n"
-        "Adaptive scroll: %.0f-%.0f%% new/frame, %d wheel notch(es)/step (%s)\n",
+        "Adaptive scroll: %.0f-%.0f%% new/frame\n",
         region.left,
         region.top,
         region.width,
         region.height,
         scroll.min_new_frac * 100.0,
-        scroll.max_new_frac * 100.0,
-        scroll.notches_per_step,
-        region.height <= SC_SMALL_SCREEN_HEIGHT ? "small screen" : "large screen"
+        scroll.max_new_frac * 100.0
     );
 
     sc_countdown(cfg.countdown, "Switch to the VRM window with the article. Capture starts in:");

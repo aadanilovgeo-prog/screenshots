@@ -64,24 +64,18 @@ static int stall_tracker_should_stop(
 }
 
 void sc_scroll_settings_init(const ScRegion *region, const ScConfig *cfg, ScScrollSettings *scroll) {
+    (void)region;
+
     if (!scroll) {
         return;
     }
 
     scroll->micro_delay = cfg && cfg->micro_delay > 0.0 ? cfg->micro_delay : SC_MICRO_DELAY_SEC;
     scroll->max_micro_steps = SC_MAX_MICRO_STEPS;
+    scroll->min_new_frac = SC_MIN_NEW_FRAC;
+    scroll->max_new_frac = SC_MAX_NEW_FRAC;
     scroll->focus_click = cfg && !cfg->no_focus_click;
     scroll->focus_each_step = cfg && cfg->focus_each_step;
-
-    if (region && region->height > 0 && region->height <= SC_SMALL_SCREEN_HEIGHT) {
-        scroll->min_new_frac = SC_MIN_NEW_FRAC_SMALL;
-        scroll->max_new_frac = SC_MAX_NEW_FRAC_SMALL;
-        scroll->notches_per_step = SC_NOTCHES_PER_STEP_SMALL;
-    } else {
-        scroll->min_new_frac = SC_MIN_NEW_FRAC;
-        scroll->max_new_frac = SC_MAX_NEW_FRAC;
-        scroll->notches_per_step = SC_NOTCHES_PER_STEP;
-    }
 }
 
 int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
@@ -144,37 +138,6 @@ int sc_wait_for_frame_stable(const ScRegion *region, ScImage *out) {
 
 #define SC_SCROLL_END 2
 
-static int choose_scroll_notches(
-    int micro,
-    int current_shift,
-    int micro_steps_used,
-    int min_shift,
-    int max_shift,
-    int base_notches
-) {
-    int base = base_notches > 0 ? base_notches : 1;
-
-    if (micro == 0) {
-        return 1;
-    }
-
-    if (current_shift >= min_shift) {
-        return 1;
-    }
-
-    if (current_shift > 0 && micro_steps_used > 0) {
-        int per_step = current_shift / micro_steps_used;
-        if (per_step < 1) {
-            per_step = 1;
-        }
-        if (current_shift + per_step * base > max_shift) {
-            return 1;
-        }
-    }
-
-    return base;
-}
-
 static int page_still_scrollable(
     const ScImage *previous,
     const ScImage *current,
@@ -207,7 +170,6 @@ static int adaptive_scroll_to_target(
     int max_shift;
     int micro;
     int no_change_attempts = 0;
-    int base_notches;
 
     if (!region || !scroll || !previous || !current || !shift) {
         return 0;
@@ -222,20 +184,10 @@ static int adaptive_scroll_to_target(
         max_shift = min_shift + height / 10;
     }
 
-    base_notches = scroll->notches_per_step > 0 ? scroll->notches_per_step : 1;
     memset(shift, 0, sizeof(*shift));
 
     for (micro = 0; micro < scroll->max_micro_steps; micro++) {
-        int notches = choose_scroll_notches(
-            micro,
-            shift->detected_shift,
-            shift->micro_steps_used,
-            min_shift,
-            max_shift,
-            base_notches
-        );
-
-        sc_scroll_wheel_notches(region, scroll, notches);
+        sc_scroll_wheel_notches(region, scroll, 1);
         sc_sleep_ms((int)(scroll->micro_delay * 1000.0));
 
         if (!sc_wait_for_frame_stable(region, current)) {
@@ -270,9 +222,8 @@ static int adaptive_scroll_to_target(
         shift->new_content_frac = (double)shift->detected_shift / (double)height;
 
         printf(
-            "  Adaptive scroll micro=%d notches=%d shift=%dpx (%.1f%% new content, target %.0f-%.0f%%)\n",
+            "  Adaptive scroll micro=%d shift=%dpx (%.1f%% new content, target %.0f-%.0f%%)\n",
             micro + 1,
-            notches,
             shift->detected_shift,
             shift->new_content_frac * 100.0,
             scroll->min_new_frac * 100.0,
@@ -428,11 +379,10 @@ int sc_capture_long_page(
     }
 
     printf(
-        "Capturing (target %.0f-%.0f%% new/frame, %d notch(es)/step, safe stitch=%s)...\n"
+        "Capturing (target %.0f-%.0f%% new/frame, safe stitch=%s)...\n"
         "Max output height for this region: ~%d px (~%.0f MB)\n",
         scroll->min_new_frac * 100.0,
         scroll->max_new_frac * 100.0,
-        scroll->notches_per_step,
         safe_stitch ? "on" : "off",
         max_output_height,
         (double)SC_MAX_IMAGE_BYTES / (1024.0 * 1024.0)

@@ -9,11 +9,6 @@
 
 #define SC_MIN_NEW_FRAC 0.22
 #define SC_MAX_NEW_FRAC 0.32
-#define SC_MIN_NEW_FRAC_SMALL 0.44
-#define SC_MAX_NEW_FRAC_SMALL 0.64
-#define SC_SMALL_SCREEN_HEIGHT 1000
-#define SC_NOTCHES_PER_STEP 3
-#define SC_NOTCHES_PER_STEP_SMALL 3
 #define SC_MAX_MICRO_STEPS 80
 #define SC_MICRO_DELAY_SEC 0.05
 #define SC_MAX_OUTPUT_HEIGHT 600000
@@ -43,7 +38,6 @@ typedef struct {
     double min_new_frac;
     double max_new_frac;
     int max_micro_steps;
-    int notches_per_step;
     int focus_click;
     int focus_each_step;
 } ScScrollSettings;

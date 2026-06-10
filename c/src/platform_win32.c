@@ -94,8 +94,7 @@ void sc_scroll_wheel_notches(const ScRegion *region, const ScScrollSettings *scr
 }
 
 void sc_scroll_wheel_step(const ScRegion *region, const ScScrollSettings *scroll) {
-    int notches = scroll && scroll->notches_per_step > 0 ? scroll->notches_per_step : 1;
-    sc_scroll_wheel_notches(region, scroll, notches);
+    sc_scroll_wheel_notches(region, scroll, 1);
 }
 
 int sc_capture_region(const ScRegion *region, ScImage *out) {
