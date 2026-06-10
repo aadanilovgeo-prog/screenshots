@@ -10,11 +10,9 @@
 #define SC_MIN_ACCEPT_NEW_FRAC 0.08
 #define SC_END_CONFIRM_ATTEMPTS 4
 #define SC_END_RETRY_SETTLE_MS 450
-#define SC_STALL_REPEAT_LIMIT 2
-#define SC_STALL_DUP_RISK 0.88
+#define SC_STALL_REPEAT_LIMIT 1
+#define SC_STALL_DUP_RISK 0.78
 #define SC_STALL_SHIFT_TOLERANCE 12
-#define SC_STALL_THIN_OVERLAP_FRAC 0.20
-#define SC_STALL_MIN_FRAMES 4
 
 typedef struct {
     int last_shift;
@@ -33,23 +31,15 @@ static int stall_tracker_should_stop(
     ScStallTracker *tracker,
     const ScShiftData *shift,
     const ScSafeCrop *crop,
-    int frame_height,
-    int frames_captured
+    int frame_height
 ) {
     int shift_similar;
     int overlap_similar;
     int high_dup;
     int thin_overlap;
-    int rubber_band;
+    int bottom_bounce;
 
     if (!tracker || !shift || !crop) {
-        return 0;
-    }
-
-    if (frames_captured < SC_STALL_MIN_FRAMES) {
-        tracker->repeat_count = 0;
-        tracker->last_shift = shift->detected_shift;
-        tracker->last_overlap = shift->detected_overlap;
         return 0;
     }
 
@@ -58,15 +48,10 @@ static int stall_tracker_should_stop(
     overlap_similar = tracker->last_overlap > 0
         && abs(shift->detected_overlap - tracker->last_overlap) <= SC_STALL_SHIFT_TOLERANCE;
     high_dup = crop->duplicate_risk >= SC_STALL_DUP_RISK;
-    thin_overlap = shift->detected_overlap < (int)(frame_height * SC_STALL_THIN_OVERLAP_FRAC);
-    rubber_band = shift_similar
-        && overlap_similar
-        && high_dup
-        && thin_overlap
-        && shift->detected_shift < (int)(frame_height * SC_MIN_ACCEPT_NEW_FRAC)
-        && !shift->scroll_overshoot;
+    thin_overlap = shift->detected_overlap < (int)(frame_height * 0.18);
+    bottom_bounce = shift->scroll_overshoot && thin_overlap && high_dup;
 
-    if (rubber_band) {
+    if ((shift_similar && overlap_similar && high_dup) || bottom_bounce) {
         tracker->repeat_count++;
     } else {
         tracker->repeat_count = 0;
@@ -464,13 +449,14 @@ int sc_capture_long_page(
         safe_crop = sc_choose_safe_crop(previous, current, &shift, safe_stitch);
         sc_stitch_log_frame(log, index, &shift, &safe_crop, 0);
 
-        if (stall_tracker_should_stop(&stall_tracker, &shift, &safe_crop, region->height, captured)) {
+        if (stall_tracker_should_stop(&stall_tracker, &shift, &safe_crop, region->height)) {
             printf(
-                "End of page: repeated scroll pattern at bottom "
-                "(shift=%dpx overlap=%dpx dup_risk=%.2f).\n",
+                "End of page: repeated scroll pattern detected "
+                "(shift=%dpx overlap=%dpx dup_risk=%.2f, %d similar frames).\n",
                 shift.detected_shift,
                 shift.detected_overlap,
-                safe_crop.duplicate_risk
+                safe_crop.duplicate_risk,
+                SC_STALL_REPEAT_LIMIT + 1
             );
             sc_image_free(current);
             *reached_end = 1;
