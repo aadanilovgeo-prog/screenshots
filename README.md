@@ -1,3 +1,5 @@
+сборка:
+
 1- запустить  C:\w64devkit\w64devkit\w64devkit.exe
 2-в открывшемся терминале:
   a- cd C:/Users/andrey.danilov/Documents/OutOfProjects/Скришнотер/vrmshot_v3_bottom_to_top 
